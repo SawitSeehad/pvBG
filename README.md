@@ -2,7 +2,7 @@
 
 ![reMBG Logo](assets/icon.png)
 
-![Version](https://github.com/SawitSeehad/reMBG?label=version&color=blue)
+![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 
