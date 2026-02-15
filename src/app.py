@@ -19,7 +19,7 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("reMBG (Offline)")
+        self.title("reMBG v1.0.0 (Offline)")
         self.geometry("900x600")
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
