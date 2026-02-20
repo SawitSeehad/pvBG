@@ -2,7 +2,7 @@
 
 ![pvBG Logo](assets/icon.png)
 
-![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v1.1.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 
@@ -90,7 +90,7 @@ This project is protected by a **Dual License** structure:
 The source code (Python scripts, installers, GUI) is licensed under the **MIT License**.
 You are free to use, modify, and distribute the code, provided you include the original copyright notice.
 
-### 2. AI Model (`segmentasi_manusia.onnx`)
+### 2. AI Model (`pvBG.onnx`)
 
 The trained AI model provided in this repository is licensed under **CC BY-NC-SA 4.0** (Creative Commons).
 

@@ -36,11 +36,14 @@ def make_checkerboard(width: int, height: int, tile: int = 12) -> np.ndarray:
     return np.repeat(arr, 3, axis=2)
 
 
+# Opacity of the dimmed original photo background shown in repair mode (0.0–1.0)
+REPAIR_BG_OPACITY = 0.70
+
+
 def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     """
     Composite an RGBA numpy array onto a checkerboard.
-    Returns an RGB numpy array ready for display.
-    All operations in numpy — no PIL loop overhead.
+    Used in normal (non-repair) preview mode.
     """
     h, w    = rgba_np.shape[:2]
     checker = make_checkerboard(w, h)
@@ -48,6 +51,31 @@ def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     rgb     = rgba_np[:, :, :3].astype(np.float32)
     result  = (rgb * alpha + checker.astype(np.float32) * (1.0 - alpha))
     return result.astype(np.uint8)
+
+
+def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
+                        bg_opacity: float = REPAIR_BG_OPACITY) -> np.ndarray:
+    """
+    Composite the segmentation result over the dimmed original photo.
+    Used exclusively in repair mode so the user can see the original
+    image context while painting.
+
+    Opaque foreground pixels render at full brightness.
+    Transparent (erased) areas show the original photo at bg_opacity.
+
+    Args:
+        rgba_np    : H x W x 4 uint8 — current RGBA result at display size.
+        orig_np    : H x W x 3 uint8 — original RGB photo at display size.
+        bg_opacity : float in [0, 1] — brightness of the background photo.
+
+    Returns:
+        H x W x 3 uint8 RGB array ready for canvas display.
+    """
+    alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
+    fg     = rgba_np[:, :, :3].astype(np.float32)
+    bg     = orig_np.astype(np.float32) * bg_opacity
+    result = fg * alpha + bg * (1.0 - alpha)
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
@@ -76,21 +104,20 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             self.engine      = None
             self.status_text = f"❌  Engine error: {e}"
 
-        # Core state
         self.current_result           = None   
         self._current_input_path      = None
         self._orig_photo_ref          = None
 
-        # Repair state — all editing happens on display-size numpy arrays
         self._repair_active     = False
         self._repair_mode       = tk.StringVar(value="restore")
+        self._repair_mode.trace_add("write", lambda *_: self._on_repair_mode_change())
         self._brush_size        = tk.IntVar(value=18)
         self._history           = []           
         self._redo_stack        = []
         self._last_xy           = None
 
-        self._disp_rgba_np      = None       
-        self._disp_orig_np      = None         
+        self._disp_rgba_np      = None         
+        self._disp_orig_np      = None        
         self._disp_w            = 0
         self._disp_h            = 0
         self._canvas_offset     = (0, 0)
@@ -288,6 +315,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             hover_color="#455a64", command=self._redo
         ).pack(side="left", padx=(2, 6))
 
+
         ctk.CTkButton(
             self.repair_toolbar, text="✖ Exit Repair", width=90, height=28,
             font=ctk.CTkFont(size=11), fg_color="#b71c1c",
@@ -351,6 +379,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.btn_save.configure(state="disabled")
         self.btn_repair.configure(state="disabled")
         self.btn_process.configure(state="normal")
+        self.btn_open.configure(state="normal")
 
         w, h = img.size
         self._set_status(
@@ -428,6 +457,11 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.btn_process.configure(state="normal", text="▶  Remove Background")
         self.btn_open.configure(state="normal")
         self._set_status(f"❌  Error: {message}")
+
+    def _on_repair_mode_change(self):
+        """Refresh canvas immediately when user switches between Restore and Erase mode."""
+        if self._repair_active and self._disp_rgba_np is not None:
+            self._refresh_canvas_from_cache()
 
     def _toggle_repair(self):
         """Toggle repair mode on/off."""
@@ -533,11 +567,21 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def _refresh_canvas_from_cache(self):
         """
-        Composite self._disp_rgba_np onto checker and push to canvas.
+        Composite self._disp_rgba_np and push to canvas.
+
+        In normal mode   : composite over checkerboard (transparency visible).
+        In repair mode   : composite over dimmed original photo so the user
+                           can see context while painting.
         Operates entirely on the small display-size array — instant.
         """
-        comp_np    = composite_np(self._disp_rgba_np)
-        photo_img  = Image.fromarray(comp_np, mode="RGB")
+        if (self._repair_active
+                and self._disp_orig_np is not None
+                and self._repair_mode.get() == "restore"):
+            comp = composite_repair_np(self._disp_rgba_np, self._disp_orig_np)
+        else:
+            comp = composite_np(self._disp_rgba_np)
+
+        photo_img  = Image.fromarray(comp, mode="RGB")
         ox, oy     = self._canvas_offset
 
         self._canvas_photo = ImageTk.PhotoImage(photo_img)
@@ -591,6 +635,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         if x0 >= x1 or y0 >= y1:
             return
 
+        # Build circle mask within bounding box
         xs = np.arange(x0, x1) - ix
         ys = np.arange(y0, y1) - iy
         mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
