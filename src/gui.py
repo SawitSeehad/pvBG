@@ -38,7 +38,6 @@ def make_checkerboard(width: int, height: int, tile: int = 12) -> np.ndarray:
 # Opacity of the dimmed original photo background shown in repair mode (0.0–1.0)
 REPAIR_BG_OPACITY = 0.70
 
-
 def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     """
     Composite an RGBA numpy array onto a checkerboard.
@@ -50,7 +49,6 @@ def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     rgb     = rgba_np[:, :, :3].astype(np.float32)
     result  = (rgb * alpha + checker.astype(np.float32) * (1.0 - alpha))
     return result.astype(np.uint8)
-
 
 def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
                         bg_opacity: float = REPAIR_BG_OPACITY) -> np.ndarray:
