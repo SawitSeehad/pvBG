@@ -2,7 +2,7 @@
 
 ![pvBG Logo](assets/icon.png)
 
-![Version](https://img.shields.io/badge/version-v1.1.1-blue.svg)
+![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 
@@ -22,6 +22,15 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 - 🖥️ **Cross-Platform:** Works seamlessly on Windows and Linux.
 
 ---
+
+
+## 🆕 What's New in v1.2.0
+- **Enhanced Accuracy:** Improved human segmentation for distant subjects.
+- **Manual Editing:** Added **Restore** and **Eraser** tools for fine-tuning results.
+- **Improved UX:** Fixed brush delays and added a **Clear** button for faster workflow.
+
+---
+
 
 ## 📋 Prerequisites
 

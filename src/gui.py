@@ -35,12 +35,13 @@ def make_checkerboard(width: int, height: int, tile: int = 12) -> np.ndarray:
     arr  = np.where(mask[:, :, np.newaxis], 200, 155).astype(np.uint8)
     return np.repeat(arr, 3, axis=2)
 
+# Opacity of the dimmed original photo background shown in repair mode (0.0–1.0)
+REPAIR_BG_OPACITY = 0.70
 
 def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     """
     Composite an RGBA numpy array onto a checkerboard.
-    Returns an RGB numpy array ready for display.
-    All operations in numpy — no PIL loop overhead.
+    Used in normal (non-repair) preview mode.
     """
     h, w    = rgba_np.shape[:2]
     checker = make_checkerboard(w, h)
@@ -48,6 +49,30 @@ def composite_np(rgba_np: np.ndarray) -> np.ndarray:
     rgb     = rgba_np[:, :, :3].astype(np.float32)
     result  = (rgb * alpha + checker.astype(np.float32) * (1.0 - alpha))
     return result.astype(np.uint8)
+
+def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
+                        bg_opacity: float = REPAIR_BG_OPACITY) -> np.ndarray:
+    """
+    Composite the segmentation result over the dimmed original photo.
+    Used exclusively in repair mode so the user can see the original
+    image context while painting.
+
+    Opaque foreground pixels render at full brightness.
+    Transparent (erased) areas show the original photo at bg_opacity.
+
+    Args:
+        rgba_np    : H x W x 4 uint8 — current RGBA result at display size.
+        orig_np    : H x W x 3 uint8 — original RGB photo at display size.
+        bg_opacity : float in [0, 1] — brightness of the background photo.
+
+    Returns:
+        H x W x 3 uint8 RGB array ready for canvas display.
+    """
+    alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
+    fg     = rgba_np[:, :, :3].astype(np.float32)
+    bg     = orig_np.astype(np.float32) * bg_opacity
+    result = fg * alpha + bg * (1.0 - alpha)
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
@@ -193,7 +218,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         # Controls
         ctrl = ctk.CTkFrame(self, fg_color="transparent")
         ctrl.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(2, 2))
-        for i in range(4):
+        for i in range(5):
             ctrl.grid_columnconfigure(i, weight=1)
 
         self.btn_open = ctk.CTkButton(
@@ -223,6 +248,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         )
         self.btn_save.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
 
+        self.btn_clear = ctk.CTkButton(
+            ctrl, text="🗑  Clear", command=self.clear_all,
+            height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10,
+            state="disabled", fg_color="#c62828", hover_color="#d32f2f"
+        )
+        self.btn_clear.grid(row=0, column=4, padx=8, pady=6, sticky="ew")
+
         self.lbl_info = ctk.CTkLabel(
             self, text=self.status_text,
             font=ctk.CTkFont(size=12), text_color="gray", wraplength=1000
@@ -248,13 +280,15 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ctk.CTkRadioButton(
             self.repair_toolbar, text="✏️ Restore",
             variable=self._repair_mode, value="restore",
-            font=ctk.CTkFont(size=12), fg_color="#1976d2"
+            font=ctk.CTkFont(size=12), fg_color="#1976d2",
+            command=self._refresh_canvas_from_cache
         ).pack(side="left", padx=6)
 
         ctk.CTkRadioButton(
             self.repair_toolbar, text="🧹 Erase",
             variable=self._repair_mode, value="erase",
-            font=ctk.CTkFont(size=12), fg_color="#c62828"
+            font=ctk.CTkFont(size=12), fg_color="#c62828",
+            command=self._refresh_canvas_from_cache
         ).pack(side="left", padx=6)
 
         ctk.CTkLabel(
@@ -289,9 +323,9 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ).pack(side="left", padx=(2, 6))
 
         ctk.CTkButton(
-            self.repair_toolbar, text="✖ Exit Repair", width=90, height=28,
+            self.repair_toolbar, text="✖ Cancel", width=90, height=28,
             font=ctk.CTkFont(size=11), fg_color="#b71c1c",
-            hover_color="#c62828", command=self._exit_repair
+            hover_color="#c62828", command=lambda: self._exit_repair(save=False)
         ).pack(side="right", padx=8)
 
     def _setup_dnd(self):
@@ -302,6 +336,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def _on_drop(self, event):
         """Handle a file drop event."""
+        if self._current_input_path is not None:
+            messagebox.showwarning(
+                "Workspace Not Empty",
+                "Please clear the current image and result before loading a new one."
+            )
+            return
+
         path = event.data.strip().strip("{}").split("} {")[0]
         if os.path.isfile(path) and path.lower().endswith(SUPPORTED_EXT):
             self._load_image(path)
@@ -310,13 +351,22 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def open_image(self):
         """Open file manager dialog and load the selected image."""
+        if self._current_input_path is not None:
+            messagebox.showwarning(
+                "Workspace Not Empty",
+                "Please clear the current image and result before loading a new one."
+            )
+            return
+
         if not self.engine:
             messagebox.showerror("Engine Error", "pvBG model is not loaded.")
             return
+        
         path = filedialog.askopenfilename(
             title="Select an image",
             filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.bmp"), ("All files", "*.*")]
         )
+
         if path:
             self._load_image(path)
 
@@ -329,7 +379,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             path (str): Absolute path to the image file.
         """
         if self._repair_active:
-            self._exit_repair()
+            self._exit_repair(save=False)
 
         try:
             img = Image.open(path).convert("RGB")
@@ -350,7 +400,8 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.lbl_res.configure(image=None, text="Ready to process.\nClick ▶ Remove Background.")
         self.btn_save.configure(state="disabled")
         self.btn_repair.configure(state="disabled")
-        self.btn_process.configure(state="normal")
+        self.btn_process.configure(state="normal", text="▶  Remove Background")
+        self.btn_clear.configure(state="normal")
 
         w, h = img.size
         self._set_status(
@@ -363,7 +414,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         if not self.engine or not self._current_input_path:
             return
         if self._repair_active:
-            self._exit_repair()
+            self._exit_repair(save=False)
 
         self.btn_process.configure(state="disabled", text="⏳  Processing...")
         self.btn_open.configure(state="disabled")
@@ -402,7 +453,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self._display_result_label()
         self.btn_save.configure(state="normal")
         self.btn_repair.configure(state="normal")
-        self.btn_process.configure(state="normal", text="▶  Remove Background")
+        self.btn_process.configure(state="disabled", text="✅  Processed")
         self.btn_open.configure(state="normal")
 
         w, h = self.current_result.size
@@ -450,7 +501,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self._repair_active = True
         self._history.clear()
         self._redo_stack.clear()
-        self._push_history()
 
         self.lbl_res.grid_remove()
         self.repair_toolbar.grid()
@@ -469,13 +519,15 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
         self.after(50, self._rebuild_display_cache)
 
-    def _exit_repair(self):
+    def _exit_repair(self, save: bool = True):
         """
-        Exit repair mode, apply display-res edits back to full-res, and
-        restore the normal result preview.
+        Exit repair mode.
+        If save=True, apply display-res edits back to full-res.
+        If save=False, discard edits.
         """
         if self._repair_active and self._disp_rgba_np is not None:
-            self._commit_display_to_fullres()
+            if save:
+                self._commit_display_to_fullres()
 
         self._repair_active = False
         self._disp_rgba_np  = None
@@ -488,10 +540,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self._display_result_label()
 
         self.btn_repair.configure(text="🖌  Repair Mask", fg_color="#6a1b9a", hover_color="#7b1fa2")
-        self.btn_process.configure(state="normal")
+        self.btn_process.configure(state="disabled", text="✅  Processed")
         self.btn_open.configure(state="normal")
 
-        self._set_status("🖌  Repair applied.  💾 Save as PNG to export.")
+        if save:
+            self._set_status("🖌  Repair applied.  💾 Save as PNG to export.")
+        else:
+            self._set_status("❎  Repair cancelled. Changes discarded.")
 
     def _rebuild_display_cache(self):
         """
@@ -533,10 +588,17 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def _refresh_canvas_from_cache(self):
         """
-        Composite self._disp_rgba_np onto checker and push to canvas.
+        Composite self._disp_rgba_np onto background based on mode and push to canvas.
         Operates entirely on the small display-size array — instant.
         """
-        comp_np    = composite_np(self._disp_rgba_np)
+        if self._disp_rgba_np is None:
+            return
+
+        if self._repair_mode.get() == "restore":
+            comp_np = composite_repair_np(self._disp_rgba_np, self._disp_orig_np)
+        else:
+            comp_np = composite_np(self._disp_rgba_np)
+
         photo_img  = Image.fromarray(comp_np, mode="RGB")
         ox, oy     = self._canvas_offset
 
@@ -632,6 +694,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
         self._last_xy = (event.x, event.y)
         self._refresh_canvas_from_cache()
+        self._on_mouse_move(event)
 
     def _on_brush_release(self, event):
         """Handle mouse release — end of stroke."""
@@ -663,30 +726,71 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def _undo(self):
         """Revert to the previous state."""
-        if not self._repair_active or len(self._history) <= 1:
+        if not self._repair_active or not self._history:
             return
-        self._redo_stack.append(self._history.pop())
-        self._disp_rgba_np = self._history[-1].copy()
+        self._redo_stack.append(self._disp_rgba_np.copy())
+        self._disp_rgba_np = self._history.pop()
         self._refresh_canvas_from_cache()
 
     def _redo(self):
         """Re-apply the last undone state."""
         if not self._repair_active or not self._redo_stack:
             return
-        state = self._redo_stack.pop()
-        self._history.append(state)
-        self._disp_rgba_np = state.copy()
+        self._push_history()
+        self._disp_rgba_np = self._redo_stack.pop()
         self._refresh_canvas_from_cache()
+
+    def clear_all(self):
+        """Reset the application state, clearing images and results."""
+        if self._repair_active:
+            # Manually reset repair state to avoid triggering result display
+            self._repair_active = False
+            self.canvas_container.grid_remove()
+            self.repair_toolbar.grid_remove()
+            self.lbl_res.grid(row=3, column=0, sticky="nsew", padx=8, pady=8)
+            self._disp_rgba_np = None
+            self._disp_orig_np = None
+            self._history.clear()
+            self._redo_stack.clear()
+
+        self._current_input_path = None
+        self.current_result = None
+        self._orig_photo_ref = None
+        self._res_label_photo = None
+        self._original_rgb_np = None
+
+        self.lbl_orig.configure(
+            image=None,
+            text="No image selected.\n\nDrop an image here\nor use the button below."
+        )
+        # Fix: Force underlying tkinter label to forget the image to prevent TclError
+        if hasattr(self.lbl_orig, "_label"):
+            self.lbl_orig._label.configure(image="")
+
+        self.lbl_res.configure(
+            image=None,
+            text="Result will appear here\nafter processing."
+        )
+        if hasattr(self.lbl_res, "_label"):
+            self.lbl_res._label.configure(image="")
+
+        self.btn_process.configure(state="disabled", text="▶  Remove Background")
+        self.btn_repair.configure(state="disabled")
+        self.btn_save.configure(state="disabled")
+        self.btn_clear.configure(state="disabled")
+        self._set_status("✅  System ready. Select or drop an image to begin.")
 
     def save_image(self):
         """Save the result RGBA image as a PNG file."""
         if not self.current_result:
             return
+        
         path = filedialog.asksaveasfilename(
             title="Save result as PNG",
             defaultextension=".png",
             filetypes=[("PNG image", "*.png")]
         )
+
         if path:
             try:
                 self.current_result.save(path, format="PNG")
