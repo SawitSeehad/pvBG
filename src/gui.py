@@ -33,7 +33,6 @@ def make_checkerboard(width: int, height: int, tile: int = 12, dark: bool = Fals
     ys   = np.arange(height) // tile
     mask = (xs[np.newaxis, :] + ys[:, np.newaxis]) % 2 == 0
     
-    # Tentukan warna checkerboard: Abu-abu gelap jika dark=True, terang jika False
     c1, c2 = (60, 40) if dark else (200, 155)
     
     arr  = np.where(mask[:, :, np.newaxis], c1, c2).astype(np.uint8)
@@ -58,17 +57,11 @@ def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
     Foreground = 100% dari gambar asli.
     Background = 50% (atau sesuai bg_opacity) dari gambar asli.
     """
-    # Ambil nilai mask/alpha (0.0 sampai 1.0)
+
     alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
-    
-    # Gunakan gambar asli sebagai base untuk KEDUA bagian
     orig_float = orig_np.astype(np.float32)
-    
-    # Foreground = 100% terang, Background = Diredupkan
     fg = orig_float
     bg = orig_float * bg_opacity
-    
-    # Campurkan berdasarkan mask alpha
     result = fg * alpha + bg * (1.0 - alpha)
     return np.clip(result, 0, 255).astype(np.uint8)
 
@@ -107,6 +100,8 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         # Repair state — all editing happens on display-size numpy arrays
         self._repair_active     = False
         self._repair_mode       = tk.StringVar(value="restore")
+        self._magic_mode        = tk.BooleanVar(value=False) # Default: OFF (Pakai fitur lama)
+        self._magic_tol         = tk.IntVar(value=40)
         self._dark_bg_mode      = tk.BooleanVar(value=False) 
         self._brush_size        = tk.IntVar(value=18)
         self._history           = []           
@@ -289,10 +284,8 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             font=ctk.CTkFont(size=12), fg_color="#c62828",
             command=self._refresh_canvas_from_cache
         ).pack(side="left", padx=6)
-        
-        # ... kode radio button Erase sebelumnya ...
 
-        # Toggle Dark BG untuk Mode Erase
+        # Toggle Dark BG 
         self._bg_switch = ctk.CTkSwitch(
             self.repair_toolbar, text="Dark BG",
             variable=self._dark_bg_mode,
@@ -301,8 +294,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             width=70
         )
         self._bg_switch.pack(side="left", padx=(15, 6))
-
-        # ... kode label Size: setelahnya ...
 
         ctk.CTkLabel(
             self.repair_toolbar, text="  |  Size:", font=ctk.CTkFont(size=12)
@@ -340,6 +331,26 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             font=ctk.CTkFont(size=11), fg_color="#b71c1c",
             hover_color="#c62828", command=lambda: self._exit_repair(save=False)
         ).pack(side="right", padx=8)
+        
+        # --- UI  Magic Brush ---
+        ctk.CTkLabel(
+            self.repair_toolbar, text=" | ", text_color="gray"
+        ).pack(side="left", padx=2)
+
+        self._magic_chk = ctk.CTkCheckBox(
+            self.repair_toolbar, text="✨ Magic",
+            variable=self._magic_mode,
+            font=ctk.CTkFont(size=12, weight="bold"), width=60,
+            fg_color="#fbc02d", hover_color="#f9a825"
+        )
+        self._magic_chk.pack(side="left", padx=(6, 2))
+
+        self._tol_slider = ctk.CTkSlider(
+            self.repair_toolbar, from_=5, to=150,
+            variable=self._magic_tol, width=80, height=16
+        )
+        self._tol_slider.pack(side="left", padx=(2, 6))
+        # -----------------------------------
 
     def _setup_dnd(self):
         """Register drag-and-drop targets."""
@@ -608,10 +619,10 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             return
         
         if self._repair_mode.get() == "restore":
-            # Jika menggunakan kode transparansi dari langkah sebelumnya:
+            
             comp_np = composite_repair_np(self._disp_rgba_np, self._disp_orig_np, bg_opacity=0.5)
         else:
-            # Mode Erase: Cek apakah switch Dark BG sedang aktif
+           
             is_dark = self._dark_bg_mode.get()
             comp_np = composite_np(self._disp_rgba_np, dark_bg=is_dark)
 
@@ -646,23 +657,22 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         """Rebuild display cache when panel size changes."""
         if self._repair_active:
             self._rebuild_display_cache()
-
+            
     def _paint_at(self, cx: float, cy: float):
-        """
-        Paint one brush stamp directly onto self._disp_rgba_np (display size).
-        Pure numpy — no PIL, no full-res access, no loop.
-        Runs on every mouse move event — must be instant.
-        """
         if self._disp_rgba_np is None:
             return
 
         ox, oy = self._canvas_offset
         ix = int(cx - ox)
         iy = int(cy - oy)
-        r  = max(1, self._brush_size.get() // 2)
+        
         dh, dw = self._disp_rgba_np.shape[:2]
 
-        # Clamp bounding box
+        if not (0 <= ix < dw and 0 <= iy < dh):
+            return
+
+        r  = max(1, self._brush_size.get() // 2)
+
         x0 = max(0, ix - r);  x1 = min(dw, ix + r + 1)
         y0 = max(0, iy - r);  y1 = min(dh, iy + r + 1)
 
@@ -672,6 +682,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         xs = np.arange(x0, x1) - ix
         ys = np.arange(y0, y1) - iy
         mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
+
+        if self._magic_mode.get():
+            ref_color = self._disp_orig_np[iy, ix].astype(np.float32)
+            roi = self._disp_orig_np[y0:y1, x0:x1].astype(np.float32)
+            color_diff = np.linalg.norm(roi - ref_color, axis=2)
+            magic_mask = color_diff <= self._magic_tol.get()
+            mask = mask & magic_mask
 
         if self._repair_mode.get() == "restore":
             self._disp_rgba_np[y0:y1, x0:x1, :3][mask] = \
