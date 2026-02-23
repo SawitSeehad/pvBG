@@ -57,13 +57,417 @@ def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
     Foreground = 100% dari gambar asli.
     Background = 50% (atau sesuai bg_opacity) dari gambar asli.
     """
-
     alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
     orig_float = orig_np.astype(np.float32)
     fg = orig_float
     bg = orig_float * bg_opacity
     result = fg * alpha + bg * (1.0 - alpha)
     return np.clip(result, 0, 255).astype(np.uint8)
+
+
+class RepairWindow(ctk.CTkToplevel):
+    """
+    Jendela terpisah untuk mode repair (mask editing).
+    Menerima gambar hasil (RGBA PIL) dan gambar asli (RGB numpy) ukuran penuh.
+    Setelah selesai, memanggil callback dengan gambar hasil yang sudah dimodifikasi.
+    """
+    def __init__(self, parent, result_image: Image.Image, original_np: np.ndarray, callback):
+        super().__init__(parent)
+        self.parent = parent
+        self.callback = callback
+
+        # Save data full size
+        self.full_np = np.array(result_image, dtype=np.uint8)          # RGBA
+        self.original_full_np = original_np.copy()                    # RGB
+
+        self.title("pvBG - Repair Mask")
+        self.geometry("900x700")
+        self.minsize(700, 500)
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.lift()
+        self.focus()
+
+        # State repair
+        self.repair_mode = tk.StringVar(value="restore")
+        self.magic_mode = tk.BooleanVar(value=False)
+        self.magic_tol = tk.IntVar(value=40)
+        self.dark_bg_mode = tk.BooleanVar(value=False)
+        self.brush_size = tk.IntVar(value=18)
+        self.zoom_factor = tk.DoubleVar(value=1.0)
+        self.zoom_factor.trace_add("write", self._on_zoom_change)
+        self.zoom_offset = (0, 0)          
+        self.zoom_disp_w = 0
+        self.zoom_disp_h = 0
+        self.last_mouse_x = None
+        self.last_mouse_y = None
+        self.history = []          # undo stack (display-size numpy)
+        self.redo_stack = []
+        self.last_xy = None
+
+        # Data display 
+        self.disp_np = None        # RGBA display
+        self.disp_orig_np = None   # RGB display
+        self.disp_w = 0
+        self.disp_h = 0
+        self.canvas_offset = (0, 0)
+        self.canvas_photo = None
+        self.cursor_oval = None
+
+        # Icon
+        self._load_icons()
+
+        # UI
+        self._build_ui()
+
+        # Binding keyboard
+        self.bind("<Control-z>", lambda e: self._undo())
+        self.bind("<Control-y>", lambda e: self._redo())
+
+        # Inisialisasi display cache 
+        self.after(100, self._rebuild_display_cache)
+
+    def _load_icons(self):
+        """Muat ikon dari folder assets (sama seperti di App)."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        assets_dir = os.path.join(current_dir, '..', 'assets')
+        try:
+            self.icon_undo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'undo.png')), size=(20, 20))
+            self.icon_redo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'forward.png')), size=(20, 20))
+        except Exception:
+            self.icon_undo = self.icon_redo = None
+
+    def _build_ui(self):
+        """Bangun toolbar, canvas, dan tombol Apply/Cancel."""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Toolbar
+        toolbar = ctk.CTkFrame(self, fg_color="#1a1a30", corner_radius=8)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+
+        # Mode radio
+        ctk.CTkLabel(toolbar, text="Mode:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(10, 4))
+        ctk.CTkRadioButton(toolbar, text="Restore", variable=self.repair_mode, value="restore",
+                           font=ctk.CTkFont(size=12), fg_color="#1976d2",
+                           command=self._update_zoom_display).pack(side="left", padx=6)
+        ctk.CTkRadioButton(toolbar, text="Erase", variable=self.repair_mode, value="erase",
+                           font=ctk.CTkFont(size=12), fg_color="#c62828",
+                           command=self._update_zoom_display).pack(side="left", padx=6)
+
+        # Dark BG switch
+        self.bg_switch = ctk.CTkSwitch(toolbar, text="Dark BG", variable=self.dark_bg_mode,
+                                        font=ctk.CTkFont(size=12),
+                                        command=self._update_zoom_display, width=70)
+        self.bg_switch.pack(side="left", padx=(15, 6))
+
+        # Brush size
+        ctk.CTkLabel(toolbar, text="  |  Size:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(10, 2))
+        ctk.CTkSlider(toolbar, from_=4, to=80, variable=self.brush_size, width=110, height=16).pack(side="left", padx=4)
+        self.lbl_brush_sz = ctk.CTkLabel(toolbar, text="18 px", font=ctk.CTkFont(size=11), width=42)
+        self.lbl_brush_sz.pack(side="left", padx=(2, 8))
+        self.brush_size.trace_add("write", lambda *_: self.lbl_brush_sz.configure(text=f"{self.brush_size.get()} px"))
+        # Zoom controls
+        ctk.CTkLabel(toolbar, text="Zoom:").pack(side="left", padx=(10,2))
+        self.zoom_slider = ctk.CTkSlider(toolbar, from_=0.5, to=3.0, variable=self.zoom_factor, width=80)
+        self.zoom_slider.pack(side="left", padx=2)
+        self.zoom_label = ctk.CTkLabel(toolbar, text="100%", width=50)
+        self.zoom_label.pack(side="left", padx=2)
+        ctk.CTkButton(toolbar, text="+", width=30, command=lambda: self.zoom_factor.set(min(3.0, self.zoom_factor.get() + 0.1))).pack(side="left", padx=1)
+        ctk.CTkButton(toolbar, text="-", width=30, command=lambda: self.zoom_factor.set(max(0.5, self.zoom_factor.get() - 0.1))).pack(side="left", padx=1)
+
+        # Undo/Redo
+        ctk.CTkButton(toolbar, text="", image=self.icon_undo, width=34, height=28,
+                      fg_color="#37474f", hover_color="#455a64", command=self._undo).pack(side="left", padx=2)
+        ctk.CTkButton(toolbar, text="", image=self.icon_redo, width=34, height=28,
+                      fg_color="#37474f", hover_color="#455a64", command=self._redo).pack(side="left", padx=(2, 6))
+
+        # Magic tools
+        ctk.CTkLabel(toolbar, text=" | ", text_color="gray").pack(side="left", padx=2)
+        ctk.CTkCheckBox(toolbar, text="Magic Tools", variable=self.magic_mode,
+                        font=ctk.CTkFont(size=12, weight="bold"), width=60,
+                        fg_color="#fbc02d", hover_color="#f9a825").pack(side="left", padx=(6, 2))
+        ctk.CTkSlider(toolbar, from_=5, to=150, variable=self.magic_tol, width=80, height=16).pack(side="left", padx=(2, 6))
+
+        # Canvas container
+        self.canvas_container = tk.Frame(self, bg="#0d0d1a")
+        self.canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.canvas_container.grid_rowconfigure(0, weight=1)
+        self.canvas_container.grid_columnconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(self.canvas_container, bg="#0d0d1a", cursor="none", highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Event bind
+        self.canvas.bind("<ButtonPress-1>", self._on_brush_press)
+        self.canvas.bind("<B1-Motion>", self._on_brush_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_brush_release)
+        self.canvas.bind("<Motion>", self._on_mouse_move)
+        self.canvas.bind("<Leave>", self._hide_cursor)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+
+        # (Apply / Cancel)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=2, column=0, pady=10)
+
+        ctk.CTkButton(btn_frame, text="Apply", width=120, height=40,
+                      fg_color="#2e7d32", hover_color="#388e3c",
+                      command=self._apply).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Cancel", width=120, height=40,
+                      fg_color="#b71c1c", hover_color="#c62828",
+                      command=self._cancel).pack(side="left", padx=10)
+
+    def _rebuild_display_cache(self, event=None):
+        """Turunkan skala gambar ke ukuran canvas."""
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw < 2 or ch < 2:
+            self.after(50, self._rebuild_display_cache)
+            return
+
+        h, w = self.full_np.shape[:2]   # ukuran penuh
+        scale = min(cw / w, ch / h, 1.0)
+        dw = max(1, int(w * scale))
+        dh = max(1, int(h * scale))
+        ox = (cw - dw) // 2
+        oy = (ch - dh) // 2
+
+        self.canvas_offset = (ox, oy)
+        self.disp_w = dw
+        self.disp_h = dh
+
+        # Downscale RGBA hasil
+        disp_rgba_pil = Image.fromarray(self.full_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
+        self.disp_np = np.array(disp_rgba_pil, dtype=np.uint8)
+
+        # Downscale original RGB
+        orig_pil = Image.fromarray(self.original_full_np, mode="RGB").resize((dw, dh), Image.Resampling.BILINEAR)
+        self.disp_orig_np = np.array(orig_pil, dtype=np.uint8)
+        self._update_zoom_display()
+
+    def _refresh_canvas_from_cache(self):
+        """Komposit ulang gambar display dan tampilkan di canvas."""
+        if self.disp_np is None:
+            return
+
+        if self.repair_mode.get() == "restore":
+            comp_np = composite_repair_np(self.disp_np, self.disp_orig_np, bg_opacity=0.5)
+        else:
+            comp_np = composite_np(self.disp_np, dark_bg=self.dark_bg_mode.get())
+
+        img = Image.fromarray(comp_np, mode="RGB")
+        ox, oy = self.canvas_offset
+        self.canvas_photo = ImageTk.PhotoImage(img)
+        self.canvas.delete("base")
+        self.canvas.create_image(ox, oy, anchor="nw", image=self.canvas_photo, tags="base")
+
+        if self.cursor_oval is None:
+            self.cursor_oval = self.canvas.create_oval(0, 0, 0, 0,
+                                                        outline="#ffffff", width=1, dash=(3,3), tags="cursor")
+        self.canvas.tag_raise("cursor")
+
+    def _commit_display_to_fullres(self):
+        """Naikkan skala hasil editing dari display ke ukuran penuh."""
+        if self.disp_np is None:
+            return
+        disp_pil = Image.fromarray(self.disp_np, mode="RGBA")
+        h, w = self.full_np.shape[:2]
+        self.full_np = np.array(disp_pil.resize((w, h), Image.Resampling.BILINEAR), dtype=np.uint8)
+
+    def _on_canvas_resize(self, event):
+        self._rebuild_display_cache()
+        
+    def _on_zoom_change(self, *args):
+        """Dipanggil saat slider zoom berubah."""
+        self._update_zoom_display()
+        self._update_zoom_label()
+
+    def _update_zoom_label(self, *args):
+        self.zoom_label.configure(text=f"{int(self.zoom_factor.get()*100)}%")
+
+    def _canvas_to_display(self, cx, cy):
+        """Konversi koordinat canvas (cx, cy) ke koordinat display asli (ix, iy)."""
+
+        if self.zoom_disp_w == 0 or self.zoom_disp_h == 0:
+            return None
+
+        ox, oy = self.zoom_offset
+        zf = self.zoom_factor.get()
+        img_zx = cx - ox
+        img_zy = cy - oy
+
+        if 0 <= img_zx < self.zoom_disp_w and 0 <= img_zy < self.zoom_disp_h:
+            ix = int(img_zx / zf)
+            iy = int(img_zy / zf)
+            ix = max(0, min(self.disp_w - 1, ix))
+            iy = max(0, min(self.disp_h - 1, iy))
+            return ix, iy
+        else:
+            return None
+
+    def _update_zoom_display(self):
+        """Perbarui tampilan canvas dengan gambar yang sudah di-zoom."""
+        if self.disp_np is None:
+            return
+        zf = self.zoom_factor.get()
+        new_w = max(1, int(self.disp_w * zf))
+        new_h = max(1, int(self.disp_h * zf))
+        self.zoom_disp_w = new_w
+        self.zoom_disp_h = new_h
+
+        rgba_pil = Image.fromarray(self.disp_np, mode="RGBA").resize((new_w, new_h), Image.Resampling.BILINEAR)
+        zoom_rgba = np.array(rgba_pil, dtype=np.uint8)
+        orig_pil = Image.fromarray(self.disp_orig_np, mode="RGB").resize((new_w, new_h), Image.Resampling.BILINEAR)
+        zoom_orig = np.array(orig_pil, dtype=np.uint8)
+
+        if self.repair_mode.get() == "restore":
+            comp_np = composite_repair_np(zoom_rgba, zoom_orig, bg_opacity=0.5)
+        else:
+            comp_np = composite_np(zoom_rgba, dark_bg=self.dark_bg_mode.get())
+
+        comp_img = Image.fromarray(comp_np, mode="RGB")
+        self.canvas_photo = ImageTk.PhotoImage(comp_img)
+        
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw < 2 or ch < 2:
+            cw, ch = 800, 600 
+        ox = (cw - new_w) // 2
+        oy = (ch - new_h) // 2
+        self.zoom_offset = (ox, oy)
+
+        self.canvas.delete("base")
+        self.canvas.create_image(ox, oy, anchor="nw", image=self.canvas_photo, tags="base")
+        
+        if self.cursor_oval is None:
+            self.cursor_oval = self.canvas.create_oval(0, 0, 0, 0,
+                                                        outline="#ffffff", width=1, dash=(3,3), tags="cursor")
+        self.canvas.tag_raise("cursor")
+
+        if self.last_mouse_x is not None:
+            class DummyEvent:
+                pass
+            e = DummyEvent()
+            e.x = self.last_mouse_x
+            e.y = self.last_mouse_y
+            self._on_mouse_move(e)
+
+    def _push_history(self):
+        """Simpan state display ke undo stack."""
+        if self.disp_np is not None:
+            self.history.append(self.disp_np.copy())
+            if len(self.history) > MAX_HISTORY:
+                self.history.pop(0)
+
+    def _undo(self):
+        if not self.history:
+            return
+        self.redo_stack.append(self.disp_np.copy())
+        self.disp_np = self.history.pop()
+        self._update_zoom_display()
+
+    def _redo(self):
+        if not self.redo_stack:
+            return
+        self._push_history()
+        self.disp_np = self.redo_stack.pop()
+        self._update_zoom_display()
+
+    def _paint_at(self, ix, iy):
+        """Terapkan brush di koordinat display asli (ix, iy)."""
+        if self.disp_np is None:
+            return
+
+        dh, dw = self.disp_np.shape[:2]
+        if not (0 <= ix < dw and 0 <= iy < dh):
+            return
+
+        r = max(1, self.brush_size.get() // 2)
+        x0 = max(0, ix - r); x1 = min(dw, ix + r + 1)
+        y0 = max(0, iy - r); y1 = min(dh, iy + r + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+
+        xs = np.arange(x0, x1) - ix
+        ys = np.arange(y0, y1) - iy
+        mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
+
+        if self.magic_mode.get():
+            ref_color = self.disp_orig_np[iy, ix].astype(np.float32)
+            roi = self.disp_orig_np[y0:y1, x0:x1].astype(np.float32)
+            color_diff = np.linalg.norm(roi - ref_color, axis=2)
+            mask = mask & (color_diff <= self.magic_tol.get())
+
+        if self.repair_mode.get() == "restore":
+            self.disp_np[y0:y1, x0:x1, :3][mask] = self.disp_orig_np[y0:y1, x0:x1][mask]
+            self.disp_np[y0:y1, x0:x1, 3][mask] = 255
+        else:
+            # Erase: alpha=0
+            self.disp_np[y0:y1, x0:x1, 3][mask] = 0
+
+    def _on_brush_press(self, event):
+        if self.disp_np is None:
+            return
+        coord = self._canvas_to_display(event.x, event.y)
+        if coord:
+            self._push_history()
+            self.redo_stack.clear()
+            self._paint_at(coord[0], coord[1])
+            self._update_zoom_display()
+            self.last_xy = (event.x, event.y)  
+
+    def _on_brush_drag(self, event):
+        if self.last_xy is None or self.disp_np is None:
+            return
+        x0, y0 = self.last_xy
+        x1, y1 = event.x, event.y
+        dist = int(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5)
+        steps = max(1, dist)
+        for i in range(1, steps + 1):
+            t = i / steps
+            cx = x0 + (x1 - x0) * t
+            cy = y0 + (y1 - y0) * t
+            coord = self._canvas_to_display(cx, cy)
+            if coord:
+                self._paint_at(coord[0], coord[1])
+        self.last_xy = (event.x, event.y)
+        self._update_zoom_display()
+        self._on_mouse_move(event)
+
+    def _on_brush_release(self, event):
+        self.last_xy = None
+
+    def _on_mouse_move(self, event):
+        """Gerakkan lingkaran kursor (ukuran disesuaikan dengan zoom)."""
+        if self.cursor_oval is None:
+            return
+        if event is None:
+            self.canvas.coords(self.cursor_oval, 0, 0, 0, 0)
+            return
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+        zf = self.zoom_factor.get()
+        r = self.brush_size.get() * zf / 2
+        self.canvas.coords(self.cursor_oval,
+                        event.x - r, event.y - r,
+                        event.x + r, event.y + r)
+        self.canvas.tag_raise("cursor")
+
+    def _hide_cursor(self, event):
+        if self.cursor_oval is not None:
+            self.canvas.coords(self.cursor_oval, 0, 0, 0, 0)
+
+    def _apply(self):
+        """Terapkan perubahan dan tutup jendela."""
+        self._commit_display_to_fullres()
+        result_img = Image.fromarray(self.full_np, mode="RGBA")
+        if self.callback:
+            self.callback(result_img)
+        self.destroy()
+
+    def _cancel(self):
+        """Tutup jendela tanpa menyimpan."""
+        self.destroy()
+
 
 class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
@@ -76,7 +480,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
         self.configure(bg="#12121f")
-
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         assets_dir  = os.path.join(current_dir, '..', 'assets')
@@ -109,36 +512,16 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.current_result           = None   
         self._current_input_path      = None
         self._orig_photo_ref          = None
-
-        # Repair state — all editing happens on display-size numpy arrays
-        self._repair_active     = False
-        self._repair_mode       = tk.StringVar(value="restore")
-        self._magic_mode        = tk.BooleanVar(value=False) # Default: OFF (Pakai fitur lama)
-        self._magic_tol         = tk.IntVar(value=40)
-        self._dark_bg_mode      = tk.BooleanVar(value=False) 
-        self._brush_size        = tk.IntVar(value=18)
-        self._history           = []           
-        self._redo_stack        = []
-        self._last_xy           = None
-
-        self._disp_rgba_np      = None       
-        self._disp_orig_np      = None         
-        self._disp_w            = 0
-        self._disp_h            = 0
-        self._canvas_offset     = (0, 0)
-        self._canvas_photo      = None
-        self._cursor_oval       = None
+        self._original_rgb_np         = None   # full-res RGB numpy
+        self.repair_window = None
 
         self._build_ui()
-
-        self.bind("<Control-z>", lambda e: self._undo() if self._repair_active else None)
-        self.bind("<Control-y>", lambda e: self._redo() if self._repair_active else None)
 
         if DND_AVAILABLE:
             self._setup_dnd()
 
     def _build_ui(self):
-        """Build all UI widgets."""
+        """Build all UI widgets (tanpa komponen repair)."""
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -176,11 +559,11 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
                 font=ctk.CTkFont(size=11), text_color="#444466"
             ).place(relx=0.5, rely=0.96, anchor="s")
 
-        # Right panel — grid-managed for repair toolbar swap
+        # Right panel
         self.frame_right = ctk.CTkFrame(self, corner_radius=12)
         self.frame_right.grid(row=1, column=1, padx=(6, 14), pady=6, sticky="nsew")
         self.frame_right.grid_columnconfigure(0, weight=1)
-        self.frame_right.grid_rowconfigure(3, weight=1)
+        self.frame_right.grid_rowconfigure(2, weight=1)
 
         ctk.CTkLabel(
             self.frame_right, text="Result",
@@ -191,36 +574,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             self.frame_right, height=1, fg_color="#2a2a4a"
         ).grid(row=1, column=0, sticky="ew", padx=12, pady=4)
 
-        # Repair toolbar (hidden by default)
-        self.repair_toolbar = ctk.CTkFrame(self.frame_right, fg_color="#1a1a30", corner_radius=8)
-        self.repair_toolbar.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 2))
-        self.repair_toolbar.grid_remove()
-        self._build_repair_toolbar()
-
-        # Canvas (hidden by default, shown in repair mode)
-        self.canvas_container = tk.Frame(self.frame_right, bg="#0d0d1a")
-        self.canvas_container.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        self.canvas_container.grid_remove()
-
-        self.result_canvas = tk.Canvas(
-            self.canvas_container, bg="#0d0d1a",
-            cursor="none", highlightthickness=0
-        )
-        self.result_canvas.pack(fill="both", expand=True)
-        self.result_canvas.bind("<ButtonPress-1>",   self._on_brush_press)
-        self.result_canvas.bind("<B1-Motion>",       self._on_brush_drag)
-        self.result_canvas.bind("<ButtonRelease-1>", self._on_brush_release)
-        self.result_canvas.bind("<Motion>",          self._on_mouse_move)
-        self.result_canvas.bind("<Leave>",           self._hide_cursor)
-        self.result_canvas.bind("<Configure>",       self._on_canvas_resize)
-
-        # Result label (shown when NOT in repair mode)
         self.lbl_res = ctk.CTkLabel(
             self.frame_right,
             text="Result will appear here\nafter processing.",
-            font=ctk.CTkFont(size=13), text_color="gray", wraplength=340
+            font=ctk.CTkFont(size=13), text_color="gray", wraplength=340,
+            anchor="center"
         )
-        self.lbl_res.grid(row=3, column=0, sticky="nsew", padx=8, pady=8)
+        self.lbl_res.grid(row=2, column=0, sticky="nsew", padx=8, pady=8)
 
         # Controls
         ctrl = ctk.CTkFrame(self, fg_color="transparent")
@@ -278,93 +638,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ctk.CTkFrame(outer, height=1, fg_color="#2a2a4a").pack(fill="x", padx=12, pady=4)
         return outer
 
-    def _build_repair_toolbar(self):
-        """Build the inline repair toolbar widgets."""
-        ctk.CTkLabel(
-            self.repair_toolbar, text="Mode:", font=ctk.CTkFont(size=12)
-        ).pack(side="left", padx=(10, 4), pady=6)
-
-        ctk.CTkRadioButton(
-            self.repair_toolbar, text="Restore",
-            variable=self._repair_mode, value="restore",
-            font=ctk.CTkFont(size=12), fg_color="#1976d2",
-            command=self._refresh_canvas_from_cache
-        ).pack(side="left", padx=6)
-
-        ctk.CTkRadioButton(
-            self.repair_toolbar, text="Erase",
-            variable=self._repair_mode, value="erase",
-            font=ctk.CTkFont(size=12), fg_color="#c62828",
-            command=self._refresh_canvas_from_cache
-        ).pack(side="left", padx=6)
-
-        # Toggle Dark BG 
-        self._bg_switch = ctk.CTkSwitch(
-            self.repair_toolbar, text="Dark BG",
-            variable=self._dark_bg_mode,
-            font=ctk.CTkFont(size=12),
-            command=self._refresh_canvas_from_cache,
-            width=70
-        )
-        self._bg_switch.pack(side="left", padx=(15, 6))
-
-        ctk.CTkLabel(
-            self.repair_toolbar, text="  |  Size:", font=ctk.CTkFont(size=12)
-        ).pack(side="left", padx=(10, 2))
-
-        ctk.CTkSlider(
-            self.repair_toolbar, from_=4, to=80,
-            variable=self._brush_size, width=110, height=16
-        ).pack(side="left", padx=4)
-
-        self._lbl_brush_sz = ctk.CTkLabel(
-            self.repair_toolbar, text="18 px",
-            font=ctk.CTkFont(size=11), width=42
-        )
-        self._lbl_brush_sz.pack(side="left", padx=(2, 8))
-        self._brush_size.trace_add(
-            "write",
-            lambda *_: self._lbl_brush_sz.configure(text=f"{self._brush_size.get()} px")
-        )
-
-        ctk.CTkButton(
-            self.repair_toolbar, text="", image=self.icon_undo, width=34, height=28,
-            font=ctk.CTkFont(size=14), fg_color="#37474f",
-            hover_color="#455a64", command=self._undo
-        ).pack(side="left", padx=2)
-
-        ctk.CTkButton(
-            self.repair_toolbar, text="", image=self.icon_redo, width=34, height=28,
-            font=ctk.CTkFont(size=14), fg_color="#37474f",
-            hover_color="#455a64", command=self._redo
-        ).pack(side="left", padx=(2, 6))
-
-        ctk.CTkButton(
-            self.repair_toolbar, text="Cancel", width=90, height=28,
-            font=ctk.CTkFont(size=11), fg_color="#b71c1c",
-            hover_color="#c62828", command=lambda: self._exit_repair(save=False)
-        ).pack(side="right", padx=8)
-        
-        # --- UI  Magic Brush ---
-        ctk.CTkLabel(
-            self.repair_toolbar, text=" | ", text_color="gray"
-        ).pack(side="left", padx=2)
-
-        self._magic_chk = ctk.CTkCheckBox(
-            self.repair_toolbar, text="Magic Tools",
-            variable=self._magic_mode,
-            font=ctk.CTkFont(size=12, weight="bold"), width=60,
-            fg_color="#fbc02d", hover_color="#f9a825"
-        )
-        self._magic_chk.pack(side="left", padx=(6, 2))
-
-        self._tol_slider = ctk.CTkSlider(
-            self.repair_toolbar, from_=5, to=150,
-            variable=self._magic_tol, width=80, height=16
-        )
-        self._tol_slider.pack(side="left", padx=(2, 6))
-        # -----------------------------------
-
     def _setup_dnd(self):
         """Register drag-and-drop targets."""
         for widget in (self, self.frame_left, self.lbl_orig):
@@ -411,12 +684,10 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         """
         Load an image from disk, show preview in Original panel,
         and reset the Result panel.
-
-        Args:
-            path (str): Absolute path to the image file.
         """
-        if self._repair_active:
-            self._exit_repair(save=False)
+        if self.repair_window and self.repair_window.winfo_exists():
+            self.repair_window.destroy()
+            self.repair_window = None
 
         try:
             img = Image.open(path).convert("RGB")
@@ -450,8 +721,9 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         """Start background removal in a background thread."""
         if not self.engine or not self._current_input_path:
             return
-        if self._repair_active:
-            self._exit_repair(save=False)
+        if self.repair_window and self.repair_window.winfo_exists():
+            self.repair_window.destroy()
+            self.repair_window = None
 
         self.btn_process.configure(state="disabled", text="Wait: Processing...")
         self.btn_open.configure(state="disabled")
@@ -470,9 +742,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         """
         Run pvBG inference on a background thread, then schedule
         the UI update back on the main thread.
-
-        Args:
-            path (str): Path to the input image.
         """
         try:
             result = self.engine.remove_background(path)
@@ -518,286 +787,35 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self._set_status(f"ERROR: Error: {message}")
 
     def _toggle_repair(self):
-        """Toggle repair mode on/off."""
-        if self._repair_active:
-            self._exit_repair()
-        else:
-            self._enter_repair()
-
-    def _enter_repair(self):
-        """
-        Switch to repair mode.
-
-        Downscales both the result and original image to display resolution
-        once. All painting happens on these small display-size arrays only.
-        The full-resolution image is only updated on mouse release.
-        """
+        """Buka jendela repair atau fokus jika sudah ada."""
         if self.current_result is None:
             return
 
-        self._repair_active = True
-        self._history.clear()
-        self._redo_stack.clear()
-
-        self.lbl_res.grid_remove()
-        self.repair_toolbar.grid()
-        self.canvas_container.grid()
-
-        self.btn_repair.configure(
-            text="OK: Done Repairing", fg_color="#00695c", hover_color="#00796b"
-        )
-        self.btn_process.configure(state="disabled")
-        self.btn_open.configure(state="disabled")
-
-        self._set_status(
-            "Repair mode — Restore or Erase.  "
-            "Ctrl+Z = Undo  |  Ctrl+Y = Redo  |  Click Done when finished."
-        )
-
-        self.after(50, self._rebuild_display_cache)
-
-    def _exit_repair(self, save: bool = True):
-        """
-        Exit repair mode.
-        If save=True, apply display-res edits back to full-res.
-        If save=False, discard edits.
-        """
-        if self._repair_active and self._disp_rgba_np is not None:
-            if save:
-                self._commit_display_to_fullres()
-
-        self._repair_active = False
-        self._disp_rgba_np  = None
-        self._disp_orig_np  = None
-
-        self.canvas_container.grid_remove()
-        self.repair_toolbar.grid_remove()
-        self.lbl_res.grid(row=3, column=0, sticky="nsew", padx=8, pady=8)
-
-        self._display_result_label()
-
-        self.btn_repair.configure(text="Repair Mask", fg_color="#6a1b9a", hover_color="#7b1fa2")
-        self.btn_process.configure(state="disabled", text="OK: Processed")
-        self.btn_open.configure(state="normal")
-
-        if save:
-            self._set_status("Repair applied. Save as PNG to export.")
+        if self.repair_window and self.repair_window.winfo_exists():
+            self.repair_window.lift()
+            self.repair_window.focus()
         else:
-            self._set_status("Cancel: Repair cancelled. Changes discarded.")
-
-    def _rebuild_display_cache(self):
-        """
-        Downscale current_result and original RGB to canvas display size.
-        This runs once on enter_repair, once on undo/redo.
-        All brush painting operates on these small arrays — very fast.
-        """
-        if self.current_result is None:
-            return
-
-        cw = self.result_canvas.winfo_width()
-        ch = self.result_canvas.winfo_height()
-
-        if cw < 2 or ch < 2:
-            self.after(60, self._rebuild_display_cache)
-            return
-
-        iw, ih = self.current_result.size
-        scale  = min(cw / iw, ch / ih, 1.0)
-        dw     = max(1, int(iw * scale))
-        dh     = max(1, int(ih * scale))
-        ox     = (cw - dw) // 2
-        oy     = (ch - dh) // 2
-
-        self._canvas_offset = (ox, oy)
-        self._disp_w        = dw
-        self._disp_h        = dh
-
-        # Downscale RGBA result to display size
-        disp_rgba = self.current_result.resize((dw, dh), Image.Resampling.BILINEAR)
-        self._disp_rgba_np = np.array(disp_rgba, dtype=np.uint8)
-
-        # Downscale original RGB to display size
-        orig_pil = Image.fromarray(self._original_rgb_np, mode="RGB")
-        disp_orig = orig_pil.resize((dw, dh), Image.Resampling.BILINEAR)
-        self._disp_orig_np = np.array(disp_orig, dtype=np.uint8)
-
-        self._refresh_canvas_from_cache()
-
-    def _refresh_canvas_from_cache(self):
-        """
-        Composite self._disp_rgba_np onto background based on mode and push to canvas.
-        Operates entirely on the small display-size array — instant.
-        """
-        if self._disp_rgba_np is None:
-            return
-        
-        if self._repair_mode.get() == "restore":
-            
-            comp_np = composite_repair_np(self._disp_rgba_np, self._disp_orig_np, bg_opacity=0.5)
-        else:
-           
-            is_dark = self._dark_bg_mode.get()
-            comp_np = composite_np(self._disp_rgba_np, dark_bg=is_dark)
-
-        photo_img  = Image.fromarray(comp_np, mode="RGB")
-        ox, oy     = self._canvas_offset
-
-        self._canvas_photo = ImageTk.PhotoImage(photo_img)
-        self.result_canvas.delete("base")
-        self.result_canvas.create_image(
-            ox, oy, anchor="nw", image=self._canvas_photo, tags="base"
-        )
-
-        if self._cursor_oval is None:
-            self._cursor_oval = self.result_canvas.create_oval(
-                0, 0, 0, 0, outline="#ffffff", width=1, dash=(3, 3), tags="cursor"
+            self.repair_window = RepairWindow(
+                self,
+                self.current_result,
+                self._original_rgb_np,
+                self._on_repair_applied
             )
-        self.result_canvas.tag_raise("cursor")
+            self.repair_window.lift()
+            self.repair_window.focus()
+            self.repair_window.after(10, self.repair_window.lift)
 
-    def _commit_display_to_fullres(self):
-        """
-        Upscale the edited display-size RGBA back to full resolution and
-        update self.current_result. Called once on exit_repair.
-        """
-        if self._disp_rgba_np is None:
-            return
-        disp_pil = Image.fromarray(self._disp_rgba_np, mode="RGBA")
-        iw, ih   = self.current_result.size
-        fullres  = disp_pil.resize((iw, ih), Image.Resampling.BILINEAR)
-        self.current_result = fullres
-
-    def _on_canvas_resize(self, event):
-        """Rebuild display cache when panel size changes."""
-        if self._repair_active:
-            self._rebuild_display_cache()
-            
-    def _paint_at(self, cx: float, cy: float):
-        if self._disp_rgba_np is None:
-            return
-
-        ox, oy = self._canvas_offset
-        ix = int(cx - ox)
-        iy = int(cy - oy)
-        
-        dh, dw = self._disp_rgba_np.shape[:2]
-
-        if not (0 <= ix < dw and 0 <= iy < dh):
-            return
-
-        r  = max(1, self._brush_size.get() // 2)
-
-        x0 = max(0, ix - r);  x1 = min(dw, ix + r + 1)
-        y0 = max(0, iy - r);  y1 = min(dh, iy + r + 1)
-
-        if x0 >= x1 or y0 >= y1:
-            return
-
-        xs = np.arange(x0, x1) - ix
-        ys = np.arange(y0, y1) - iy
-        mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
-
-        if self._magic_mode.get():
-            ref_color = self._disp_orig_np[iy, ix].astype(np.float32)
-            roi = self._disp_orig_np[y0:y1, x0:x1].astype(np.float32)
-            color_diff = np.linalg.norm(roi - ref_color, axis=2)
-            magic_mask = color_diff <= self._magic_tol.get()
-            mask = mask & magic_mask
-
-        if self._repair_mode.get() == "restore":
-            self._disp_rgba_np[y0:y1, x0:x1, :3][mask] = \
-                self._disp_orig_np[y0:y1, x0:x1][mask]
-            self._disp_rgba_np[y0:y1, x0:x1,  3][mask] = 255
-        else:
-            self._disp_rgba_np[y0:y1, x0:x1, 3][mask] = 0
-
-    def _on_brush_press(self, event):
-        """Handle mouse press — save undo state and paint first stamp."""
-        if not self._repair_active:
-            return
-        self._push_history()
-        self._redo_stack.clear()
-        self._paint_at(event.x, event.y)
-        self._refresh_canvas_from_cache()
-        self._last_xy = (event.x, event.y)
-
-    def _on_brush_drag(self, event):
-        """
-        Handle mouse drag — paint along the stroke path and refresh canvas.
-        Interpolates between last and current position for smooth lines.
-        All work is numpy on display-size array — stays fast.
-        """
-        if not self._repair_active:
-            return
-
-        if self._last_xy:
-            x0, y0 = self._last_xy
-            x1, y1 = event.x, event.y
-            dist   = int(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5)
-            steps  = max(1, dist)
-            for i in range(1, steps + 1):
-                t = i / steps
-                self._paint_at(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
-
-        self._last_xy = (event.x, event.y)
-        self._refresh_canvas_from_cache()
-        self._on_mouse_move(event)
-
-    def _on_brush_release(self, event):
-        """Handle mouse release — end of stroke."""
-        self._last_xy = None
-
-    def _on_mouse_move(self, event):
-        """Update cursor circle preview on mouse move (no paint)."""
-        if not self._repair_active or self._cursor_oval is None:
-            return
-        r = self._brush_size.get() / 2
-        self.result_canvas.coords(
-            self._cursor_oval,
-            event.x - r, event.y - r,
-            event.x + r, event.y + r
-        )
-        self.result_canvas.tag_raise("cursor")
-
-    def _hide_cursor(self, event):
-        """Hide the cursor circle when mouse leaves the canvas."""
-        if self._cursor_oval is not None:
-            self.result_canvas.coords(self._cursor_oval, 0, 0, 0, 0)
-
-    def _push_history(self):
-        """Save current display-size RGBA into the undo history."""
-        if self._disp_rgba_np is not None:
-            self._history.append(self._disp_rgba_np.copy())
-            if len(self._history) > MAX_HISTORY:
-                self._history.pop(0)
-
-    def _undo(self):
-        """Revert to the previous state."""
-        if not self._repair_active or not self._history:
-            return
-        self._redo_stack.append(self._disp_rgba_np.copy())
-        self._disp_rgba_np = self._history.pop()
-        self._refresh_canvas_from_cache()
-
-    def _redo(self):
-        """Re-apply the last undone state."""
-        if not self._repair_active or not self._redo_stack:
-            return
-        self._push_history()
-        self._disp_rgba_np = self._redo_stack.pop()
-        self._refresh_canvas_from_cache()
+    def _on_repair_applied(self, new_result: Image.Image):
+        """Callback dari jendela repair: perbarui hasil dan tampilan."""
+        self.current_result = new_result
+        self._display_result_label()
+        self.repair_window = None
 
     def clear_all(self):
         """Reset the application state, clearing images and results."""
-        if self._repair_active:
-            # Manually reset repair state to avoid triggering result display
-            self._repair_active = False
-            self.canvas_container.grid_remove()
-            self.repair_toolbar.grid_remove()
-            self.lbl_res.grid(row=3, column=0, sticky="nsew", padx=8, pady=8)
-            self._disp_rgba_np = None
-            self._disp_orig_np = None
-            self._history.clear()
-            self._redo_stack.clear()
+        if self.repair_window and self.repair_window.winfo_exists():
+            self.repair_window.destroy()
+            self.repair_window = None
 
         self._current_input_path = None
         self.current_result = None
@@ -809,7 +827,6 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             image=None,
             text="No image selected.\n\nDrop an image here\nor use the button below."
         )
-        # Fix: Force underlying tkinter label to forget the image to prevent TclError
         if hasattr(self.lbl_orig, "_label"):
             self.lbl_orig._label.configure(image="")
 
