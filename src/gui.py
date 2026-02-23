@@ -27,50 +27,48 @@ SUPPORTED_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 PREVIEW_SIZE  = 380
 MAX_HISTORY   = 20
 
-def make_checkerboard(width: int, height: int, tile: int = 12) -> np.ndarray:
+def make_checkerboard(width: int, height: int, tile: int = 12, dark: bool = False) -> np.ndarray:
     """Generate an RGB checkerboard numpy array (fast, no Python loops)."""
     xs   = np.arange(width)  // tile
     ys   = np.arange(height) // tile
     mask = (xs[np.newaxis, :] + ys[:, np.newaxis]) % 2 == 0
-    arr  = np.where(mask[:, :, np.newaxis], 200, 155).astype(np.uint8)
+    
+    # Tentukan warna checkerboard: Abu-abu gelap jika dark=True, terang jika False
+    c1, c2 = (60, 40) if dark else (200, 155)
+    
+    arr  = np.where(mask[:, :, np.newaxis], c1, c2).astype(np.uint8)
     return np.repeat(arr, 3, axis=2)
 
-# Opacity of the dimmed original photo background shown in repair mode (0.0–1.0)
-REPAIR_BG_OPACITY = 0.70
-
-def composite_np(rgba_np: np.ndarray) -> np.ndarray:
+def composite_np(rgba_np: np.ndarray, dark_bg: bool = False) -> np.ndarray:
     """
     Composite an RGBA numpy array onto a checkerboard.
-    Used in normal (non-repair) preview mode.
+    Menerima parameter dark_bg untuk mode penghapusan gambar terang.
     """
     h, w    = rgba_np.shape[:2]
-    checker = make_checkerboard(w, h)
+    checker = make_checkerboard(w, h, dark=dark_bg)
     alpha   = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
     rgb     = rgba_np[:, :, :3].astype(np.float32)
     result  = (rgb * alpha + checker.astype(np.float32) * (1.0 - alpha))
     return result.astype(np.uint8)
 
 def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
-                        bg_opacity: float = REPAIR_BG_OPACITY) -> np.ndarray:
+                        bg_opacity: float = 0.30) -> np.ndarray:
     """
-    Composite the segmentation result over the dimmed original photo.
-    Used exclusively in repair mode so the user can see the original
-    image context while painting.
-
-    Opaque foreground pixels render at full brightness.
-    Transparent (erased) areas show the original photo at bg_opacity.
-
-    Args:
-        rgba_np    : H x W x 4 uint8 — current RGBA result at display size.
-        orig_np    : H x W x 3 uint8 — original RGB photo at display size.
-        bg_opacity : float in [0, 1] — brightness of the background photo.
-
-    Returns:
-        H x W x 3 uint8 RGB array ready for canvas display.
+    Membuat komposit Repair Mode:
+    Foreground = 100% dari gambar asli.
+    Background = 50% (atau sesuai bg_opacity) dari gambar asli.
     """
+    # Ambil nilai mask/alpha (0.0 sampai 1.0)
     alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
-    fg     = rgba_np[:, :, :3].astype(np.float32)
-    bg     = orig_np.astype(np.float32) * bg_opacity
+    
+    # Gunakan gambar asli sebagai base untuk KEDUA bagian
+    orig_float = orig_np.astype(np.float32)
+    
+    # Foreground = 100% terang, Background = Diredupkan
+    fg = orig_float
+    bg = orig_float * bg_opacity
+    
+    # Campurkan berdasarkan mask alpha
     result = fg * alpha + bg * (1.0 - alpha)
     return np.clip(result, 0, 255).astype(np.uint8)
 
@@ -109,6 +107,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         # Repair state — all editing happens on display-size numpy arrays
         self._repair_active     = False
         self._repair_mode       = tk.StringVar(value="restore")
+        self._dark_bg_mode      = tk.BooleanVar(value=False) 
         self._brush_size        = tk.IntVar(value=18)
         self._history           = []           
         self._redo_stack        = []
@@ -290,6 +289,20 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             font=ctk.CTkFont(size=12), fg_color="#c62828",
             command=self._refresh_canvas_from_cache
         ).pack(side="left", padx=6)
+        
+        # ... kode radio button Erase sebelumnya ...
+
+        # Toggle Dark BG untuk Mode Erase
+        self._bg_switch = ctk.CTkSwitch(
+            self.repair_toolbar, text="Dark BG",
+            variable=self._dark_bg_mode,
+            font=ctk.CTkFont(size=12),
+            command=self._refresh_canvas_from_cache,
+            width=70
+        )
+        self._bg_switch.pack(side="left", padx=(15, 6))
+
+        # ... kode label Size: setelahnya ...
 
         ctk.CTkLabel(
             self.repair_toolbar, text="  |  Size:", font=ctk.CTkFont(size=12)
@@ -593,11 +606,14 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         """
         if self._disp_rgba_np is None:
             return
-
+        
         if self._repair_mode.get() == "restore":
-            comp_np = composite_repair_np(self._disp_rgba_np, self._disp_orig_np)
+            # Jika menggunakan kode transparansi dari langkah sebelumnya:
+            comp_np = composite_repair_np(self._disp_rgba_np, self._disp_orig_np, bg_opacity=0.5)
         else:
-            comp_np = composite_np(self._disp_rgba_np)
+            # Mode Erase: Cek apakah switch Dark BG sedang aktif
+            is_dark = self._dark_bg_mode.get()
+            comp_np = composite_np(self._disp_rgba_np, dark_bg=is_dark)
 
         photo_img  = Image.fromarray(comp_np, mode="RGB")
         ox, oy     = self._canvas_offset
