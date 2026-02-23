@@ -77,6 +77,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ctk.set_default_color_theme("blue")
         self.configure(bg="#12121f")
 
+
         current_dir = os.path.dirname(os.path.abspath(__file__))
         assets_dir  = os.path.join(current_dir, '..', 'assets')
         try:
@@ -84,13 +85,25 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         except Exception:
             pass
 
+        # Load icons
+        try:
+            self.icon_save = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'diskette.png')), size=(20, 20))
+            self.icon_undo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'undo.png')), size=(20, 20))
+            self.icon_play = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'play-button.png')), size=(20, 20))
+            self.icon_redo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'forward.png')), size=(20, 20))
+            self.icon_support = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'support.png')), size=(20, 20))
+            self.icon_eraser = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'eraser.png')), size=(20, 20))
+        except Exception as e:
+            print(f"Error loading icons: {e}")
+            self.icon_save = self.icon_undo = self.icon_play = self.icon_redo = self.icon_support = self.icon_eraser = None
+
         model_path = os.path.join(current_dir, '..', 'models', 'pvBG.onnx')
         try:
             self.engine      = Engine(model_path)
-            self.status_text = "✅  System ready. Select or drop an image to begin."
+            self.status_text = "OK: System ready. Select or drop an image to begin."
         except Exception as e:
             self.engine      = None
-            self.status_text = f"❌  Engine error: {e}"
+            self.status_text = f"ERROR: Engine error: {e}"
 
         # Core state
         self.current_result           = None   
@@ -159,7 +172,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
         if DND_AVAILABLE:
             ctk.CTkLabel(
-                self.frame_left, text="⬇  Drop image here",
+                self.frame_left, text="Drop image here",
                 font=ctk.CTkFont(size=11), text_color="#444466"
             ).place(relx=0.5, rely=0.96, anchor="s")
 
@@ -216,34 +229,34 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             ctrl.grid_columnconfigure(i, weight=1)
 
         self.btn_open = ctk.CTkButton(
-            ctrl, text="📂  Select Image", command=self.open_image,
+            ctrl, text="Select Image", command=self.open_image,
             height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10
         )
         self.btn_open.grid(row=0, column=0, padx=8, pady=6, sticky="ew")
 
         self.btn_process = ctk.CTkButton(
-            ctrl, text="▶  Remove Background", command=self._trigger_process,
+            ctrl, text="Remove Background", image=self.icon_play, command=self._trigger_process,
             height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10,
             state="disabled", fg_color="#1565c0", hover_color="#1976d2"
         )
         self.btn_process.grid(row=0, column=1, padx=8, pady=6, sticky="ew")
 
         self.btn_repair = ctk.CTkButton(
-            ctrl, text="🖌  Repair Mask", command=self._toggle_repair,
+            ctrl, text="Repair Mask", image=self.icon_support, command=self._toggle_repair,
             height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10,
             state="disabled", fg_color="#6a1b9a", hover_color="#7b1fa2"
         )
         self.btn_repair.grid(row=0, column=2, padx=8, pady=6, sticky="ew")
 
         self.btn_save = ctk.CTkButton(
-            ctrl, text="💾  Save as PNG", command=self.save_image,
+            ctrl, text="Save as PNG", image=self.icon_save, command=self.save_image,
             height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10,
             state="disabled", fg_color="#2e7d32", hover_color="#388e3c"
         )
         self.btn_save.grid(row=0, column=3, padx=8, pady=6, sticky="ew")
 
         self.btn_clear = ctk.CTkButton(
-            ctrl, text="🗑  Clear", command=self.clear_all,
+            ctrl, text="Clear", image=self.icon_eraser, command=self.clear_all,
             height=40, font=ctk.CTkFont(size=13, weight="bold"), corner_radius=10,
             state="disabled", fg_color="#c62828", hover_color="#d32f2f"
         )
@@ -272,14 +285,14 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ).pack(side="left", padx=(10, 4), pady=6)
 
         ctk.CTkRadioButton(
-            self.repair_toolbar, text="✏️ Restore",
+            self.repair_toolbar, text="Restore",
             variable=self._repair_mode, value="restore",
             font=ctk.CTkFont(size=12), fg_color="#1976d2",
             command=self._refresh_canvas_from_cache
         ).pack(side="left", padx=6)
 
         ctk.CTkRadioButton(
-            self.repair_toolbar, text="🧹 Erase",
+            self.repair_toolbar, text="Erase",
             variable=self._repair_mode, value="erase",
             font=ctk.CTkFont(size=12), fg_color="#c62828",
             command=self._refresh_canvas_from_cache
@@ -315,19 +328,19 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         )
 
         ctk.CTkButton(
-            self.repair_toolbar, text="↩", width=34, height=28,
+            self.repair_toolbar, text="", image=self.icon_undo, width=34, height=28,
             font=ctk.CTkFont(size=14), fg_color="#37474f",
             hover_color="#455a64", command=self._undo
         ).pack(side="left", padx=2)
 
         ctk.CTkButton(
-            self.repair_toolbar, text="↪", width=34, height=28,
+            self.repair_toolbar, text="", image=self.icon_redo, width=34, height=28,
             font=ctk.CTkFont(size=14), fg_color="#37474f",
             hover_color="#455a64", command=self._redo
         ).pack(side="left", padx=(2, 6))
 
         ctk.CTkButton(
-            self.repair_toolbar, text="✖ Cancel", width=90, height=28,
+            self.repair_toolbar, text="Cancel", width=90, height=28,
             font=ctk.CTkFont(size=11), fg_color="#b71c1c",
             hover_color="#c62828", command=lambda: self._exit_repair(save=False)
         ).pack(side="right", padx=8)
@@ -338,7 +351,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         ).pack(side="left", padx=2)
 
         self._magic_chk = ctk.CTkCheckBox(
-            self.repair_toolbar, text="✨ Magic",
+            self.repair_toolbar, text="Magic Tools",
             variable=self._magic_mode,
             font=ctk.CTkFont(size=12, weight="bold"), width=60,
             fg_color="#fbc02d", hover_color="#f9a825"
@@ -371,7 +384,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         if os.path.isfile(path) and path.lower().endswith(SUPPORTED_EXT):
             self._load_image(path)
         else:
-            self._set_status("⚠️  Unsupported file. Drop a JPG, PNG, WEBP, or BMP image.")
+            self._set_status("Warning: Unsupported file. Drop a JPG, PNG, WEBP, or BMP image.")
 
     def open_image(self):
         """Open file manager dialog and load the selected image."""
@@ -408,7 +421,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         try:
             img = Image.open(path).convert("RGB")
         except Exception as e:
-            self._set_status(f"❌  Failed to open image: {e}")
+            self._set_status(f"ERROR: Failed to open image: {e}")
             return
 
         self._current_input_path = path
@@ -421,16 +434,16 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.lbl_orig.configure(image=photo, text="")
 
         self.current_result = None
-        self.lbl_res.configure(image=None, text="Ready to process.\nClick ▶ Remove Background.")
+        self.lbl_res.configure(image=None, text="Ready to process.\nClick Remove Background.")
         self.btn_save.configure(state="disabled")
         self.btn_repair.configure(state="disabled")
-        self.btn_process.configure(state="normal", text="▶  Remove Background")
+        self.btn_process.configure(state="normal", text="Remove Background")
         self.btn_clear.configure(state="normal")
 
         w, h = img.size
         self._set_status(
-            f"📂  Loaded: {os.path.basename(path)}  ({w} × {h} px)"
-            f"  —  Click ▶ Remove Background to process."
+            f"Loaded: {os.path.basename(path)}  ({w} × {h} px)"
+            f" — Click Remove Background to process."
         )
 
     def _trigger_process(self):
@@ -440,12 +453,12 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         if self._repair_active:
             self._exit_repair(save=False)
 
-        self.btn_process.configure(state="disabled", text="⏳  Processing...")
+        self.btn_process.configure(state="disabled", text="Wait: Processing...")
         self.btn_open.configure(state="disabled")
         self.btn_repair.configure(state="disabled")
         self.btn_save.configure(state="disabled")
-        self.lbl_res.configure(image=None, text="⏳  Removing background...\nPlease wait.")
-        self._set_status("⏳  pvBG is processing the image. Please wait...")
+        self.lbl_res.configure(image=None, text="Wait: Removing background...\nPlease wait.")
+        self._set_status("Wait: pvBG is processing the image. Please wait...")
 
         threading.Thread(
             target=self._run_inference,
@@ -477,13 +490,13 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self._display_result_label()
         self.btn_save.configure(state="normal")
         self.btn_repair.configure(state="normal")
-        self.btn_process.configure(state="disabled", text="✅  Processed")
+        self.btn_process.configure(state="disabled", text="OK: Processed")
         self.btn_open.configure(state="normal")
 
         w, h = self.current_result.size
         self._set_status(
-            f"✅  Done!  {w} × {h} px  —  "
-            f"🖌 Repair Mask to fix edges,  💾 Save as PNG to export."
+            f"OK: Done!  {w} × {h} px — "
+            f"Repair Mask to fix edges, Save as PNG to export."
         )
 
     def _display_result_label(self):
@@ -499,10 +512,10 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
     def _on_inference_error(self, message: str):
         """Handle inference errors and restore UI state."""
-        self.lbl_res.configure(image=None, text="❌  Processing failed.")
-        self.btn_process.configure(state="normal", text="▶  Remove Background")
+        self.lbl_res.configure(image=None, text="ERROR: Processing failed.")
+        self.btn_process.configure(state="normal", text="Remove Background")
         self.btn_open.configure(state="normal")
-        self._set_status(f"❌  Error: {message}")
+        self._set_status(f"ERROR: Error: {message}")
 
     def _toggle_repair(self):
         """Toggle repair mode on/off."""
@@ -531,14 +544,14 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.canvas_container.grid()
 
         self.btn_repair.configure(
-            text="✅  Done Repairing", fg_color="#00695c", hover_color="#00796b"
+            text="OK: Done Repairing", fg_color="#00695c", hover_color="#00796b"
         )
         self.btn_process.configure(state="disabled")
         self.btn_open.configure(state="disabled")
 
         self._set_status(
-            "🖌  Repair mode  —  ✏️ Restore or 🧹 Erase.  "
-            "Ctrl+Z = Undo  |  Ctrl+Y = Redo  |  Click ✅ Done when finished."
+            "Repair mode — Restore or Erase.  "
+            "Ctrl+Z = Undo  |  Ctrl+Y = Redo  |  Click Done when finished."
         )
 
         self.after(50, self._rebuild_display_cache)
@@ -563,14 +576,14 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
         self._display_result_label()
 
-        self.btn_repair.configure(text="🖌  Repair Mask", fg_color="#6a1b9a", hover_color="#7b1fa2")
-        self.btn_process.configure(state="disabled", text="✅  Processed")
+        self.btn_repair.configure(text="Repair Mask", fg_color="#6a1b9a", hover_color="#7b1fa2")
+        self.btn_process.configure(state="disabled", text="OK: Processed")
         self.btn_open.configure(state="normal")
 
         if save:
-            self._set_status("🖌  Repair applied.  💾 Save as PNG to export.")
+            self._set_status("Repair applied. Save as PNG to export.")
         else:
-            self._set_status("❎  Repair cancelled. Changes discarded.")
+            self._set_status("Cancel: Repair cancelled. Changes discarded.")
 
     def _rebuild_display_cache(self):
         """
@@ -807,11 +820,11 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         if hasattr(self.lbl_res, "_label"):
             self.lbl_res._label.configure(image="")
 
-        self.btn_process.configure(state="disabled", text="▶  Remove Background")
+        self.btn_process.configure(state="disabled", text="Remove Background")
         self.btn_repair.configure(state="disabled")
         self.btn_save.configure(state="disabled")
         self.btn_clear.configure(state="disabled")
-        self._set_status("✅  System ready. Select or drop an image to begin.")
+        self._set_status("OK: System ready. Select or drop an image to begin.")
 
     def save_image(self):
         """Save the result RGBA image as a PNG file."""
@@ -828,7 +841,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             try:
                 self.current_result.save(path, format="PNG")
                 messagebox.showinfo("Saved", f"Image saved!\n{path}")
-                self._set_status(f"💾  Saved to: {path}")
+                self._set_status(f"Saved to: {path}")
             except Exception as e:
                 messagebox.showerror("Save Error", f"Failed to save:\n{e}")
 
