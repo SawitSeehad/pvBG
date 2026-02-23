@@ -500,7 +500,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             print(f"Error loading icons: {e}")
             self.icon_save = self.icon_undo = self.icon_play = self.icon_redo = self.icon_support = self.icon_eraser = None
 
-        model_path = os.path.join(current_dir, '..', 'models', 'pvBG.onnx')
+        model_path = os.path.join(current_dir, '..', 'models', 'pvBG_UNet_224_DiceBCE_v1.2.onnx')
         try:
             self.engine      = Engine(model_path)
             self.status_text = "OK: System ready. Select or drop an image to begin."
