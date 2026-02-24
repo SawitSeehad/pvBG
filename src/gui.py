@@ -528,7 +528,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("pvBG v1.0.0 — Private Background Removal (Offline)")
+        self.title("pvBG v1.3.2 — Private Background Removal (Offline)")
         self.geometry("1100x720")
         self.minsize(900, 620)
 
