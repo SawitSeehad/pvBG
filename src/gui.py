@@ -102,6 +102,42 @@ def rgb2lab_manual(rgb: np.ndarray) -> np.ndarray:
 
     return lab
 
+class ToolTip:
+    """
+    Simple tooltip for tkinter/ctk widget.
+    """
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind('<Enter>', self.enter)
+        widget.bind('<Leave>', self.leave)
+
+    def enter(self, event=None):
+        self.show_tip()
+
+    def leave(self, event=None):
+        self.hide_tip()
+
+    def show_tip(self):
+        if self.tip_window or not self.text:
+            return
+        x, y, _, _ = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0, 0, 0, 0)
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                         background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                         font=("tahoma", "8", "normal"))
+        label.pack()
+
+    def hide_tip(self):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
 class RepairWindow(ctk.CTkToplevel):
     """
     A separate window for mask editing (repair mode).
@@ -112,6 +148,7 @@ class RepairWindow(ctk.CTkToplevel):
         super().__init__(parent)
         self.parent = parent
         self.callback = callback
+        self._updating_zoom = False
 
         # Save data full size
         self.full_np = np.array(result_image, dtype=np.uint8)          # RGBA
@@ -140,6 +177,13 @@ class RepairWindow(ctk.CTkToplevel):
         self.history = []         
         self.redo_stack = []
         self.last_xy = None
+        self.pan_start = None          
+        self.pan_start_offset = None   
+        self.zoom_offset = None        
+        self._prev_zoom_factor = 1.0   
+        self.pan_mode = tk.BooleanVar(value=False)  
+        self.pan_start = None         
+        self.pan_start_offset = None   
 
         # Display data
         self.disp_np = None       
@@ -160,6 +204,8 @@ class RepairWindow(ctk.CTkToplevel):
         # Keyboard bindings
         self.bind("<Control-z>", lambda e: self._undo())
         self.bind("<Control-y>", lambda e: self._redo())
+        self.bind('<KeyPress-p>', self._on_p_shortcut)
+        self.bind('<KeyPress-P>', self._on_p_shortcut)
 
         # Initialize display cache
         self.after(100, self._rebuild_display_cache)
@@ -171,8 +217,14 @@ class RepairWindow(ctk.CTkToplevel):
         try:
             self.icon_undo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'undo.png')), size=(20, 20))
             self.icon_redo = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'forward.png')), size=(20, 20))
-        except Exception:
-            self.icon_undo = self.icon_redo = None
+            self.icon_pan = ctk.CTkImage(Image.open(os.path.join(assets_dir, 'pan.png')), size=(20, 20))
+        except Exception as e:
+            print(f"Error loading icons: {e}")
+            self.icon_undo = self.icon_redo = self.icon_pan = None
+            
+    def _on_p_shortcut(self, event):
+        """Toggle pan mode by pressing the letter P."""
+        self._toggle_pan_mode()
 
     def _build_ui(self):
         """Build the toolbar, canvas, and Apply/Cancel buttons."""
@@ -209,10 +261,16 @@ class RepairWindow(ctk.CTkToplevel):
         ctk.CTkLabel(toolbar, text="Zoom:").pack(side="left", padx=(10,2))
         self.zoom_slider = ctk.CTkSlider(toolbar, from_=0.5, to=3.0, variable=self.zoom_factor, width=80)
         self.zoom_slider.pack(side="left", padx=2)
-        self.zoom_label = ctk.CTkLabel(toolbar, text="100%", width=50)
-        self.zoom_label.pack(side="left", padx=2)
-        ctk.CTkButton(toolbar, text="+", width=30, command=lambda: self.zoom_factor.set(min(3.0, self.zoom_factor.get() + 0.1))).pack(side="left", padx=1)
-        ctk.CTkButton(toolbar, text="-", width=30, command=lambda: self.zoom_factor.set(max(0.5, self.zoom_factor.get() - 0.1))).pack(side="left", padx=1)
+
+        self.pan_button = ctk.CTkButton(toolbar, text="", image=self.icon_pan, width=40, command=self._toggle_pan_mode,
+                                        fg_color="#3a3a5a", hover_color="#4a4a6a")
+        ToolTip(self.pan_button, "Pan mode (P)")
+        self.pan_button.pack(side="left", padx=2)
+
+        ctk.CTkButton(toolbar, text="+", width=30,
+                    command=lambda: self.zoom_factor.set(min(3.0, self.zoom_factor.get() + 0.1))).pack(side="left", padx=1)
+        ctk.CTkButton(toolbar, text="-", width=30,
+                    command=lambda: self.zoom_factor.set(max(0.5, self.zoom_factor.get() - 0.1))).pack(side="left", padx=1)
 
         # Undo/Redo
         ctk.CTkButton(toolbar, text="", image=self.icon_undo, width=34, height=28,
@@ -245,6 +303,12 @@ class RepairWindow(ctk.CTkToplevel):
         self.canvas.bind("<Motion>", self._on_mouse_move)
         self.canvas.bind("<Leave>", self._hide_cursor)
         self.canvas.bind("<Configure>", self._on_canvas_resize)
+        self.canvas.bind("<ButtonPress-2>", self._on_pan_press)
+        self.canvas.bind("<B2-Motion>", self._on_pan_drag)
+        self.canvas.bind("<ButtonRelease-2>", self._on_pan_release)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)    # Windows
+        self.canvas.bind("<Button-4>", self._on_mousewheel)      # Linux scroll up
+        self.canvas.bind("<Button-5>", self._on_mousewheel)      # Linux scroll down
 
         # (Apply / Cancel)
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -292,9 +356,13 @@ class RepairWindow(ctk.CTkToplevel):
             self.disp_h = dh
 
         # Update offset and refresh canvas
-        ox = (cw - self.disp_w) // 2
-        oy = (ch - self.disp_h) // 2
-        self.canvas_offset = (ox, oy)
+        if self.zoom_offset is None:
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            if cw < 2 or ch < 2:
+                cw, ch = 800, 600
+            self.zoom_offset = ((cw - self.disp_w) // 2, (ch - self.disp_h) // 2)
+            self._prev_zoom_factor = 1.0
         self._update_zoom_display()
 
     def _refresh_canvas_from_cache(self):
@@ -328,14 +396,82 @@ class RepairWindow(ctk.CTkToplevel):
 
     def _on_canvas_resize(self, event):
         self._rebuild_display_cache()
+        # Set offset ke tengah setelah resize
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw < 2 or ch < 2:
+            return
+        zf = self.zoom_factor.get()
+        new_w = self.disp_w * zf
+        new_h = self.disp_h * zf
+        self.zoom_offset = ((cw - new_w) // 2, (ch - new_h) // 2)
+        self._prev_zoom_factor = zf
+        self._update_zoom_display()
         
     def _on_zoom_change(self, *args):
-        """Called when the zoom slider changes."""
+        if self._updating_zoom:
+            return
+        new_zf = self.zoom_factor.get()
+        if self._prev_zoom_factor == new_zf:
+            return
+        ratio = new_zf / self._prev_zoom_factor
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        if cw < 2 or ch < 2:
+            cw, ch = 800, 600
+        center_x = cw // 2
+        center_y = ch // 2
+        ox, oy = self.zoom_offset
+        new_ox = center_x - (center_x - ox) * ratio
+        new_oy = center_y - (center_y - oy) * ratio
+        self.zoom_offset = (new_ox, new_oy)
+        self._prev_zoom_factor = new_zf
         self._update_zoom_display()
-        self._update_zoom_label()
+        
+    def _on_mousewheel(self, event):
+        """Handle scroll wheel untuk zoom in/out di posisi mouse."""
+        if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+            factor = 1.1  # zoom in
+        elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+            factor = 0.9  # zoom out
+        else:
+            return
+        self._zoom_at(factor, event.x, event.y)
 
+    def _zoom_at(self, factor, mouse_x, mouse_y):
+        """Zoom dengan faktor tertentu, mempertahankan titik di bawah mouse."""
+        if self.disp_np is None:
+            return
+        old_zf = self.zoom_factor.get()
+        new_zf = old_zf * factor
+        new_zf = max(0.5, min(3.0, new_zf))  
+        if new_zf == old_zf:
+            return
+
+        ox, oy = self.zoom_offset
+    
+        new_ox = mouse_x - (mouse_x - ox) * (new_zf / old_zf)
+        new_oy = mouse_y - (mouse_y - oy) * (new_zf / old_zf)
+
+        self._updating_zoom = True
+        self.zoom_factor.set(new_zf)          
+        self.zoom_offset = (new_ox, new_oy)
+        self._prev_zoom_factor = new_zf        
+        self._update_zoom_display()            
+        self._updating_zoom = False
+        
     def _update_zoom_label(self, *args):
-        self.zoom_label.configure(text=f"{int(self.zoom_factor.get()*100)}%")
+        if self.zoom_offset is None:
+            return
+        
+    def _toggle_pan_mode(self):
+        """Enable/disable pan mode (pan the image with the left button)."""
+        new_state = not self.pan_mode.get()
+        self.pan_mode.set(new_state)
+        if new_state:
+            self.pan_button.configure(fg_color="#ffaa00")
+        else:
+            self.pan_button.configure(fg_color="#3a3a5a")
 
     def _canvas_to_display(self, cx, cy):
         """Convert canvas coordinates (cx, cy) to original display coordinates (ix, iy)."""
@@ -384,9 +520,9 @@ class RepairWindow(ctk.CTkToplevel):
         ch = self.canvas.winfo_height()
         if cw < 2 or ch < 2:
             cw, ch = 800, 600 
-        ox = (cw - new_w) // 2
-        oy = (ch - new_h) // 2
-        self.zoom_offset = (ox, oy)
+        ox, oy = self.zoom_offset
+        self.canvas.delete("base")
+        self.canvas.create_image(ox, oy, anchor="nw", image=self.canvas_photo, tags="base")
 
         self.canvas.delete("base")
         self.canvas.create_image(ox, oy, anchor="nw", image=self.canvas_photo, tags="base")
@@ -460,6 +596,8 @@ class RepairWindow(ctk.CTkToplevel):
             self.disp_np[y0:y1, x0:x1, 3][mask] = 0
 
     def _on_brush_press(self, event):
+        if self._on_pan_left_press(event):
+            return 
         if self.disp_np is None:
             return
         coord = self._canvas_to_display(event.x, event.y)
@@ -468,9 +606,11 @@ class RepairWindow(ctk.CTkToplevel):
             self.redo_stack.clear()
             self._paint_at(coord[0], coord[1])
             self._update_zoom_display()
-            self.last_xy = (event.x, event.y)  
+            self.last_xy = (event.x, event.y) 
 
     def _on_brush_drag(self, event):
+        if self._on_pan_left_drag(event):
+            return
         if self.last_xy is None or self.disp_np is None:
             return
         x0, y0 = self.last_xy
@@ -489,6 +629,8 @@ class RepairWindow(ctk.CTkToplevel):
         self._on_mouse_move(event)
 
     def _on_brush_release(self, event):
+        if self._on_pan_left_release(event):
+            return
         self.last_xy = None
 
     def _on_mouse_move(self, event):
@@ -506,6 +648,51 @@ class RepairWindow(ctk.CTkToplevel):
                         event.x - r, event.y - r,
                         event.x + r, event.y + r)
         self.canvas.tag_raise("cursor")
+        
+    def _on_pan_press(self, event):
+        """Start pan with the middle button."""
+        self.pan_start = (event.x, event.y)
+        self.pan_start_offset = self.zoom_offset
+
+    def _on_pan_drag(self, event):
+        """Slide the image when the middle button is pulled."""
+        if self.pan_start is None:
+            return
+        dx = event.x - self.pan_start[0]
+        dy = event.y - self.pan_start[1]
+        self.zoom_offset = (self.pan_start_offset[0] + dx, self.pan_start_offset[1] + dy)
+        self._update_zoom_display()
+
+    def _on_pan_release(self, event):
+        """End pan."""
+        self.pan_start = None
+        self.pan_start_offset = None
+        
+    def _on_pan_left_press(self, event):
+        """Mulai pan dengan tombol kiri (jika mode pan aktif)."""
+        if not self.pan_mode.get():
+            return False
+        self.pan_start = (event.x, event.y)
+        self.pan_start_offset = self.zoom_offset
+        return True
+
+    def _on_pan_left_drag(self, event):
+        """Geser gambar saat tombol kiri ditarik (jika mode pan aktif)."""
+        if not self.pan_mode.get() or self.pan_start is None:
+            return False
+        dx = event.x - self.pan_start[0]
+        dy = event.y - self.pan_start[1]
+        self.zoom_offset = (self.pan_start_offset[0] + dx, self.pan_start_offset[1] + dy)
+        self._update_zoom_display()
+        return True
+
+    def _on_pan_left_release(self, event):
+        """Akhiri pan (jika mode pan aktif)."""
+        if not self.pan_mode.get():
+            return False
+        self.pan_start = None
+        self.pan_start_offset = None
+        return True
 
     def _hide_cursor(self, event):
         if self.cursor_oval is not None:
@@ -528,7 +715,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("pvBG v1.3.2 — Private Background Removal (Offline)")
+        self.title("pvBG v1.4.0 — Private Background Removal (Offline)")
         self.geometry("1100x720")
         self.minsize(900, 620)
 

@@ -23,7 +23,7 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 
 ---
 
-## 🆕 What's New in v1.3.2
+## 🆕 What's New in v1.4.0
 - **Advanced Editing:** Introduced **Magic Tools** for smarter and faster mask refinement.
 - **Workspace Control:** Added **Zoom In / Zoom Out** functionality for pixel-perfect precision on the canvas.
 - **UI Enhancements:** Added a **Dark Background** option to help users contrast and inspect extracted subjects better.
