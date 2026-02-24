@@ -2,7 +2,7 @@
 
 ![pvBG Logo](assets/icon.png)
 
-![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-v1.3.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 
@@ -23,7 +23,7 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 
 ---
 
-## 🆕 What's New in v1.3.0
+## 🆕 What's New in v1.3.1
 - **Advanced Editing:** Introduced **Magic Tools** for smarter and faster mask refinement.
 - **Workspace Control:** Added **Zoom In / Zoom Out** functionality for pixel-perfect precision on the canvas.
 - **UI Enhancements:** Added a **Dark Background** option to help users contrast and inspect extracted subjects better.
