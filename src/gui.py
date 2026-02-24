@@ -119,7 +119,7 @@ class RepairWindow(ctk.CTkToplevel):
 
         self.title("pvBG - Repair Mask")
         self.geometry("900x700")
-        self.minsize(700, 500)
+        self.minsize(1200, 300)
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.lift()
         self.focus()
