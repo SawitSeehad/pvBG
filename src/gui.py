@@ -41,7 +41,7 @@ def make_checkerboard(width: int, height: int, tile: int = 12, dark: bool = Fals
 def composite_np(rgba_np: np.ndarray, dark_bg: bool = False) -> np.ndarray:
     """
     Composite an RGBA numpy array onto a checkerboard.
-    Menerima parameter dark_bg untuk mode penghapusan gambar terang.
+    Accepts a `dark_bg` parameter for a bright image removal mode.
     """
     h, w    = rgba_np.shape[:2]
     checker = make_checkerboard(w, h, dark=dark_bg)
@@ -53,9 +53,9 @@ def composite_np(rgba_np: np.ndarray, dark_bg: bool = False) -> np.ndarray:
 def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
                         bg_opacity: float = 0.30) -> np.ndarray:
     """
-    Membuat komposit Repair Mode:
-    Foreground = 100% dari gambar asli.
-    Background = 50% (atau sesuai bg_opacity) dari gambar asli.
+    Create a composite for Repair Mode:
+    Foreground = 100% of the original image.
+    Background = 50% (or as per bg_opacity) of the original image.
     """
     alpha  = rgba_np[:, :, 3:4].astype(np.float32) / 255.0
     orig_float = orig_np.astype(np.float32)
@@ -66,8 +66,8 @@ def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
 
 def rgb2lab_manual(rgb: np.ndarray) -> np.ndarray:
     """
-    Konversi gambar RGB (numpy array) ke CIELAB secara manual.
-    Asumsi: RGB input adalah uint8 (0-255).
+    Manually convert an RGB numpy array image to CIELAB.
+    Assumes RGB input is uint8 (0-255).
     """
     rgb_float = rgb.astype(np.float32) / 255.0
     
@@ -104,9 +104,9 @@ def rgb2lab_manual(rgb: np.ndarray) -> np.ndarray:
 
 class RepairWindow(ctk.CTkToplevel):
     """
-    Jendela terpisah untuk mode repair (mask editing).
-    Menerima gambar hasil (RGBA PIL) dan gambar asli (RGB numpy) ukuran penuh.
-    Setelah selesai, memanggil callback dengan gambar hasil yang sudah dimodifikasi.
+    A separate window for mask editing (repair mode).
+    Receives the full-size result image (RGBA PIL) and original image (RGB numpy).
+    On completion, it calls the callback with the modified result image.
     """
     def __init__(self, parent, result_image: Image.Image, original_np: np.ndarray, callback):
         super().__init__(parent)
@@ -124,10 +124,10 @@ class RepairWindow(ctk.CTkToplevel):
         self.lift()
         self.focus()
 
-        # State repair
+        # Repair state
         self.repair_mode = tk.StringVar(value="restore")
         self.magic_mode = tk.BooleanVar(value=False)
-        self.magic_tol = tk.IntVar(value=10) # Default yang lebih baik untuk Delta E
+        self.magic_tol = tk.IntVar(value=10) 
         self.dark_bg_mode = tk.BooleanVar(value=False)
         self.brush_size = tk.IntVar(value=18)
         self.zoom_factor = tk.DoubleVar(value=1.0)
@@ -137,35 +137,35 @@ class RepairWindow(ctk.CTkToplevel):
         self.zoom_disp_h = 0
         self.last_mouse_x = None
         self.last_mouse_y = None
-        self.history = []          # undo stack (display-size numpy)
+        self.history = []         
         self.redo_stack = []
         self.last_xy = None
 
-        # Data display 
-        self.disp_np = None        # RGBA display
-        self.disp_orig_np = None   # RGB display
-        self.disp_orig_lab = None  # LAB cache untuk Magic Tools
+        # Display data
+        self.disp_np = None       
+        self.disp_orig_np = None   
+        self.disp_orig_lab = None  
         self.disp_w = 0
         self.disp_h = 0
         self.canvas_offset = (0, 0)
         self.canvas_photo = None
         self.cursor_oval = None
 
-        # Icon
+        # Icons
         self._load_icons()
 
         # UI
         self._build_ui()
 
-        # Binding keyboard
+        # Keyboard bindings
         self.bind("<Control-z>", lambda e: self._undo())
         self.bind("<Control-y>", lambda e: self._redo())
 
-        # Inisialisasi display cache 
+        # Initialize display cache
         self.after(100, self._rebuild_display_cache)
 
     def _load_icons(self):
-        """Muat ikon dari folder assets (sama seperti di App)."""
+        """Load icons from the assets folder (same as in App)."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
         assets_dir = os.path.join(current_dir, '..', 'assets')
         try:
@@ -175,7 +175,7 @@ class RepairWindow(ctk.CTkToplevel):
             self.icon_undo = self.icon_redo = None
 
     def _build_ui(self):
-        """Bangun toolbar, canvas, dan tombol Apply/Cancel."""
+        """Build the toolbar, canvas, and Apply/Cancel buttons."""
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -183,7 +183,7 @@ class RepairWindow(ctk.CTkToplevel):
         toolbar = ctk.CTkFrame(self, fg_color="#1a1a30", corner_radius=8)
         toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
-        # Mode radio
+        # Mode radio buttons
         ctk.CTkLabel(toolbar, text="Mode:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(10, 4))
         ctk.CTkRadioButton(toolbar, text="Restore", variable=self.repair_mode, value="restore",
                            font=ctk.CTkFont(size=12), fg_color="#1976d2",
@@ -204,6 +204,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.lbl_brush_sz = ctk.CTkLabel(toolbar, text="18 px", font=ctk.CTkFont(size=11), width=42)
         self.lbl_brush_sz.pack(side="left", padx=(2, 8))
         self.brush_size.trace_add("write", lambda *_: self.lbl_brush_sz.configure(text=f"{self.brush_size.get()} px"))
+        
         # Zoom controls
         ctk.CTkLabel(toolbar, text="Zoom:").pack(side="left", padx=(10,2))
         self.zoom_slider = ctk.CTkSlider(toolbar, from_=0.5, to=3.0, variable=self.zoom_factor, width=80)
@@ -225,7 +226,7 @@ class RepairWindow(ctk.CTkToplevel):
                         font=ctk.CTkFont(size=12, weight="bold"), width=60,
                         fg_color="#fbc02d", hover_color="#f9a825").pack(side="left", padx=(6, 2))
         
-        # Slider toleransi disesuaikan untuk LAB
+        # Tolerance slider adjusted for LAB
         ctk.CTkSlider(toolbar, from_=1, to=50, variable=self.magic_tol, width=80, height=16).pack(side="left", padx=(2, 6))
 
         # Canvas container
@@ -237,7 +238,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.canvas = tk.Canvas(self.canvas_container, bg="#0d0d1a", cursor="none", highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
-        # Event bind
+        # Event bindings
         self.canvas.bind("<ButtonPress-1>", self._on_brush_press)
         self.canvas.bind("<B1-Motion>", self._on_brush_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_brush_release)
@@ -257,7 +258,7 @@ class RepairWindow(ctk.CTkToplevel):
                       command=self._cancel).pack(side="left", padx=10)
 
     def _rebuild_display_cache(self, event=None):
-        """Turunkan skala gambar ke ukuran canvas."""
+        """Downscale the image to fit the canvas."""
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
         if cw < 2 or ch < 2:
@@ -269,35 +270,35 @@ class RepairWindow(ctk.CTkToplevel):
         dw = max(1, int(w * scale))
         dh = max(1, int(h * scale))
 
-        # Hanya proses jika ukuran berubah untuk menghindari kerja sia-sia
+        # Only process if the size has changed to avoid unnecessary work
         if dw != self.disp_w or dh != self.disp_h:
-            # Jika cache display sudah ada (berisi editan), resize itu.
+            # If a display cache already exists (contains edits), resize it.
             if self.disp_np is not None:
                 disp_pil = Image.fromarray(self.disp_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
                 self.disp_np = np.array(disp_pil, dtype=np.uint8)
-            # Jika tidak, buat dari awal (saat inisialisasi)
+            # Otherwise, create it from scratch (on initialization)
             else:
                 disp_pil = Image.fromarray(self.full_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
                 self.disp_np = np.array(disp_pil, dtype=np.uint8)
 
-            # Selalu turunkan skala gambar original dari sumber full-res
+            # Always downscale the original image from the full-res source
             orig_pil = Image.fromarray(self.original_full_np, mode="RGB").resize((dw, dh), Image.Resampling.BILINEAR)
             self.disp_orig_np = np.array(orig_pil, dtype=np.uint8)
             
-            # Pra-konversi ke LAB untuk Magic Tools menggunakan fungsi manual
+            # Pre-convert to LAB for Magic Tools using the manual function
             self.disp_orig_lab = rgb2lab_manual(self.disp_orig_np)
 
             self.disp_w = dw
             self.disp_h = dh
 
-        # Update offset dan refresh canvas
+        # Update offset and refresh canvas
         ox = (cw - self.disp_w) // 2
         oy = (ch - self.disp_h) // 2
         self.canvas_offset = (ox, oy)
         self._update_zoom_display()
 
     def _refresh_canvas_from_cache(self):
-        """Komposit ulang gambar display dan tampilkan di canvas."""
+        """Re-composite the display image and show it on the canvas."""
         if self.disp_np is None:
             return
 
@@ -318,7 +319,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.canvas.tag_raise("cursor")
 
     def _commit_display_to_fullres(self):
-        """Naikkan skala hasil editing dari display ke ukuran penuh."""
+        """Upscale the editing result from display to full resolution."""
         if self.disp_np is None:
             return
         disp_pil = Image.fromarray(self.disp_np, mode="RGBA")
@@ -329,7 +330,7 @@ class RepairWindow(ctk.CTkToplevel):
         self._rebuild_display_cache()
         
     def _on_zoom_change(self, *args):
-        """Dipanggil saat slider zoom berubah."""
+        """Called when the zoom slider changes."""
         self._update_zoom_display()
         self._update_zoom_label()
 
@@ -337,7 +338,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.zoom_label.configure(text=f"{int(self.zoom_factor.get()*100)}%")
 
     def _canvas_to_display(self, cx, cy):
-        """Konversi koordinat canvas (cx, cy) ke koordinat display asli (ix, iy)."""
+        """Convert canvas coordinates (cx, cy) to original display coordinates (ix, iy)."""
 
         if self.zoom_disp_w == 0 or self.zoom_disp_h == 0:
             return None
@@ -357,7 +358,7 @@ class RepairWindow(ctk.CTkToplevel):
             return None
 
     def _update_zoom_display(self):
-        """Perbarui tampilan canvas dengan gambar yang sudah di-zoom."""
+        """Update the canvas view with the zoomed image."""
         if self.disp_np is None:
             return
         zf = self.zoom_factor.get()
@@ -404,7 +405,7 @@ class RepairWindow(ctk.CTkToplevel):
             self._on_mouse_move(e)
 
     def _push_history(self):
-        """Simpan state display ke undo stack."""
+        """Save the display state to the undo stack."""
         if self.disp_np is not None:
             self.history.append(self.disp_np.copy())
             if len(self.history) > MAX_HISTORY:
@@ -425,7 +426,7 @@ class RepairWindow(ctk.CTkToplevel):
         self._update_zoom_display()
 
     def _paint_at(self, ix, iy):
-        """Terapkan brush di koordinat display asli (ix, iy)."""
+        """Apply the brush at the original display coordinates (ix, iy)."""
         if self.disp_np is None:
             return
 
@@ -444,10 +445,10 @@ class RepairWindow(ctk.CTkToplevel):
         mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
 
         if self.magic_mode.get() and self.disp_orig_lab is not None:
-            # Gunakan CIELAB untuk perbedaan warna yang lebih akurat
+            # Use CIELAB for more perceptually accurate color difference
             ref_color = self.disp_orig_lab[iy, ix]
             roi = self.disp_orig_lab[y0:y1, x0:x1]
-            # Delta E (CIE76) adalah jarak Euclidean di ruang LAB
+            # Delta E (CIE76) is the Euclidean distance in LAB space
             color_diff = np.linalg.norm(roi - ref_color, axis=2)
             mask = mask & (color_diff <= self.magic_tol.get())
 
@@ -491,7 +492,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.last_xy = None
 
     def _on_mouse_move(self, event):
-        """Gerakkan lingkaran kursor (ukuran disesuaikan dengan zoom)."""
+        """Move the cursor circle (size adjusted for zoom)."""
         if self.cursor_oval is None:
             return
         if event is None:
@@ -511,7 +512,7 @@ class RepairWindow(ctk.CTkToplevel):
             self.canvas.coords(self.cursor_oval, 0, 0, 0, 0)
 
     def _apply(self):
-        """Terapkan perubahan dan tutup jendela."""
+        """Apply changes and close the window."""
         self._commit_display_to_fullres()
         result_img = Image.fromarray(self.full_np, mode="RGBA")
         if self.callback:
@@ -519,7 +520,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.destroy()
 
     def _cancel(self):
-        """Tutup jendela tanpa menyimpan."""
+        """Close the window without saving."""
         self.destroy()
 
 
@@ -575,7 +576,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             self._setup_dnd()
 
     def _build_ui(self):
-        """Build all UI widgets (tanpa komponen repair)."""
+        """Build all UI widgets (without repair components)."""
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -819,7 +820,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         w, h = self.current_result.size
         self._set_status(
             f"OK: Done!  {w} × {h} px — "
-            f"Repair Mask to fix edges, Save as PNG to export."
+            f"Repair Mask to fix edges, or Save as PNG to export."
         )
 
     def _display_result_label(self):
@@ -838,10 +839,10 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
         self.lbl_res.configure(image=None, text="ERROR: Processing failed.")
         self.btn_process.configure(state="normal", text="Remove Background")
         self.btn_open.configure(state="normal")
-        self._set_status(f"ERROR: Error: {message}")
+        self._set_status(f"ERROR: {message}")
 
     def _toggle_repair(self):
-        """Buka jendela repair atau fokus jika sudah ada."""
+        """Open the repair window or focus it if it already exists."""
         if self.current_result is None:
             return
 
@@ -860,7 +861,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
             self.repair_window.after(10, self.repair_window.lift)
 
     def _on_repair_applied(self, new_result: Image.Image):
-        """Callback dari jendela repair: perbarui hasil dan tampilan."""
+        """Callback from the repair window: update the result and display."""
         self.current_result = new_result
         self._display_result_label()
         self.repair_window = None
