@@ -64,6 +64,43 @@ def composite_repair_np(rgba_np: np.ndarray, orig_np: np.ndarray,
     result = fg * alpha + bg * (1.0 - alpha)
     return np.clip(result, 0, 255).astype(np.uint8)
 
+def rgb2lab_manual(rgb: np.ndarray) -> np.ndarray:
+    """
+    Konversi gambar RGB (numpy array) ke CIELAB secara manual.
+    Asumsi: RGB input adalah uint8 (0-255).
+    """
+    rgb_float = rgb.astype(np.float32) / 255.0
+    
+    gamma_mask = rgb_float > 0.04045
+    rgb_linear = np.empty_like(rgb_float)
+    
+    rgb_linear[gamma_mask] = np.power((rgb_float[gamma_mask] + 0.055) / 1.055, 2.4)
+    rgb_linear[~gamma_mask] = rgb_float[~gamma_mask] / 12.92
+    
+    xyz_matrix = np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041]
+    ])
+    
+    h, w, _ = rgb.shape
+    xyz = np.dot(rgb_linear.reshape(-1, 3), xyz_matrix.T).reshape(h, w, 3)
+
+    xyz[:, :, 0] /= 0.95047
+    xyz[:, :, 1] /= 1.00000
+    xyz[:, :, 2] /= 1.08883
+
+    xyz_mask = xyz > 0.008856
+    xyz_conv = np.empty_like(xyz)
+    xyz_conv[xyz_mask] = np.cbrt(xyz[xyz_mask])
+    xyz_conv[~xyz_mask] = (903.3 * xyz[~xyz_mask] + 16) / 116
+    
+    lab = np.empty_like(xyz)
+    lab[:, :, 0] = (116.0 * xyz_conv[:, :, 1]) - 16.0
+    lab[:, :, 1] = 500.0 * (xyz_conv[:, :, 0] - xyz_conv[:, :, 1])
+    lab[:, :, 2] = 200.0 * (xyz_conv[:, :, 1] - xyz_conv[:, :, 2])
+
+    return lab
 
 class RepairWindow(ctk.CTkToplevel):
     """
@@ -90,7 +127,7 @@ class RepairWindow(ctk.CTkToplevel):
         # State repair
         self.repair_mode = tk.StringVar(value="restore")
         self.magic_mode = tk.BooleanVar(value=False)
-        self.magic_tol = tk.IntVar(value=40)
+        self.magic_tol = tk.IntVar(value=10) # Default yang lebih baik untuk Delta E
         self.dark_bg_mode = tk.BooleanVar(value=False)
         self.brush_size = tk.IntVar(value=18)
         self.zoom_factor = tk.DoubleVar(value=1.0)
@@ -107,6 +144,7 @@ class RepairWindow(ctk.CTkToplevel):
         # Data display 
         self.disp_np = None        # RGBA display
         self.disp_orig_np = None   # RGB display
+        self.disp_orig_lab = None  # LAB cache untuk Magic Tools
         self.disp_w = 0
         self.disp_h = 0
         self.canvas_offset = (0, 0)
@@ -186,7 +224,9 @@ class RepairWindow(ctk.CTkToplevel):
         ctk.CTkCheckBox(toolbar, text="Magic Tools", variable=self.magic_mode,
                         font=ctk.CTkFont(size=12, weight="bold"), width=60,
                         fg_color="#fbc02d", hover_color="#f9a825").pack(side="left", padx=(6, 2))
-        ctk.CTkSlider(toolbar, from_=5, to=150, variable=self.magic_tol, width=80, height=16).pack(side="left", padx=(2, 6))
+        
+        # Slider toleransi disesuaikan untuk LAB
+        ctk.CTkSlider(toolbar, from_=1, to=50, variable=self.magic_tol, width=80, height=16).pack(side="left", padx=(2, 6))
 
         # Canvas container
         self.canvas_container = tk.Frame(self, bg="#0d0d1a")
@@ -224,24 +264,36 @@ class RepairWindow(ctk.CTkToplevel):
             self.after(50, self._rebuild_display_cache)
             return
 
-        h, w = self.full_np.shape[:2]   # ukuran penuh
+        h, w = self.full_np.shape[:2]
         scale = min(cw / w, ch / h, 1.0)
         dw = max(1, int(w * scale))
         dh = max(1, int(h * scale))
-        ox = (cw - dw) // 2
-        oy = (ch - dh) // 2
 
+        # Hanya proses jika ukuran berubah untuk menghindari kerja sia-sia
+        if dw != self.disp_w or dh != self.disp_h:
+            # Jika cache display sudah ada (berisi editan), resize itu.
+            if self.disp_np is not None:
+                disp_pil = Image.fromarray(self.disp_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
+                self.disp_np = np.array(disp_pil, dtype=np.uint8)
+            # Jika tidak, buat dari awal (saat inisialisasi)
+            else:
+                disp_pil = Image.fromarray(self.full_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
+                self.disp_np = np.array(disp_pil, dtype=np.uint8)
+
+            # Selalu turunkan skala gambar original dari sumber full-res
+            orig_pil = Image.fromarray(self.original_full_np, mode="RGB").resize((dw, dh), Image.Resampling.BILINEAR)
+            self.disp_orig_np = np.array(orig_pil, dtype=np.uint8)
+            
+            # Pra-konversi ke LAB untuk Magic Tools menggunakan fungsi manual
+            self.disp_orig_lab = rgb2lab_manual(self.disp_orig_np)
+
+            self.disp_w = dw
+            self.disp_h = dh
+
+        # Update offset dan refresh canvas
+        ox = (cw - self.disp_w) // 2
+        oy = (ch - self.disp_h) // 2
         self.canvas_offset = (ox, oy)
-        self.disp_w = dw
-        self.disp_h = dh
-
-        # Downscale RGBA hasil
-        disp_rgba_pil = Image.fromarray(self.full_np, mode="RGBA").resize((dw, dh), Image.Resampling.BILINEAR)
-        self.disp_np = np.array(disp_rgba_pil, dtype=np.uint8)
-
-        # Downscale original RGB
-        orig_pil = Image.fromarray(self.original_full_np, mode="RGB").resize((dw, dh), Image.Resampling.BILINEAR)
-        self.disp_orig_np = np.array(orig_pil, dtype=np.uint8)
         self._update_zoom_display()
 
     def _refresh_canvas_from_cache(self):
@@ -391,9 +443,11 @@ class RepairWindow(ctk.CTkToplevel):
         ys = np.arange(y0, y1) - iy
         mask = (xs[np.newaxis, :] ** 2 + ys[:, np.newaxis] ** 2) <= r * r
 
-        if self.magic_mode.get():
-            ref_color = self.disp_orig_np[iy, ix].astype(np.float32)
-            roi = self.disp_orig_np[y0:y1, x0:x1].astype(np.float32)
+        if self.magic_mode.get() and self.disp_orig_lab is not None:
+            # Gunakan CIELAB untuk perbedaan warna yang lebih akurat
+            ref_color = self.disp_orig_lab[iy, ix]
+            roi = self.disp_orig_lab[y0:y1, x0:x1]
+            # Delta E (CIE76) adalah jarak Euclidean di ruang LAB
             color_diff = np.linalg.norm(roi - ref_color, axis=2)
             mask = mask & (color_diff <= self.magic_tol.get())
 
