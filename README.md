@@ -23,11 +23,21 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 
 ---
 
-## 🆕 What's New in v1.4.0
-- **Advanced Editing:** Introduced **Magic Tools** for smarter and faster mask refinement.
-- **Workspace Control:** Added **Zoom In / Zoom Out** functionality for pixel-perfect precision on the canvas.
-- **UI Enhancements:** Added a **Dark Background** option to help users contrast and inspect extracted subjects better.
-- **Stability Fix:** Resolved a critical **Segmentation Fault** issue that caused unexpected crashes by replacing system emojis with stable `.png` icons.
+## 🆕 What's New in v1.4.0 (Major Feature Update)
+
+### ✨ Features & UI/UX Enhancements
+
+* **Advanced Canvas Navigation:** * Added support for panning and zooming using the **Middle Mouse Button (Mouse 3)** for a faster, professional workflow.
+* Introduced a dedicated **Pan/Cursor Mode (Shortcut: `P`)**, specifically designed to allow seamless canvas navigation for laptop and touchpad users.
+* Added dedicated **Zoom In / Zoom Out** UI buttons for pixel-perfect precision.
+
+
+* **Smart Editing Tools:** Introduced new **Magic Tools** for smarter, quicker, and more accurate mask refinement.
+* **Workspace Customization:** Added a **Dark Background** toggle, helping users easily contrast and inspect extracted subjects against a dark canvas.
+
+### 🐛 Bug Fixes & Stability
+
+* **Critical Crash Fix:** Resolved a underlying **Segmentation Fault** issue that caused unexpected crashes on certain OS environments by replacing system-rendered emojis with stable, custom `.png` icons.
 
 ---
 
