@@ -23,7 +23,7 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 
 ---
 
-## 🆕 What's New in v1.4.0 (Major Feature Update)
+## 🆕 What's New in v1.4.1 (Major Feature Update)
 
 ### ✨ Features & UI/UX Enhancements
 
