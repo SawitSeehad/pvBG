@@ -396,7 +396,6 @@ class RepairWindow(ctk.CTkToplevel):
 
     def _on_canvas_resize(self, event):
         self._rebuild_display_cache()
-        # Set offset ke tengah setelah resize
         cw = self.canvas.winfo_width()
         ch = self.canvas.winfo_height()
         if cw < 2 or ch < 2:
@@ -429,7 +428,7 @@ class RepairWindow(ctk.CTkToplevel):
         self._update_zoom_display()
         
     def _on_mousewheel(self, event):
-        """Handle scroll wheel untuk zoom in/out di posisi mouse."""
+        """Handle the scroll wheel to zoom in/out the mouse position.."""
         if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
             factor = 1.1  # zoom in
         elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
@@ -439,7 +438,7 @@ class RepairWindow(ctk.CTkToplevel):
         self._zoom_at(factor, event.x, event.y)
 
     def _zoom_at(self, factor, mouse_x, mouse_y):
-        """Zoom dengan faktor tertentu, mempertahankan titik di bawah mouse."""
+        """Zoom by a certain factor, keeping the point under the mouse."""
         if self.disp_np is None:
             return
         old_zf = self.zoom_factor.get()
@@ -669,7 +668,7 @@ class RepairWindow(ctk.CTkToplevel):
         self.pan_start_offset = None
         
     def _on_pan_left_press(self, event):
-        """Mulai pan dengan tombol kiri (jika mode pan aktif)."""
+        """Start pan with the left button (if pan mode is active)."""
         if not self.pan_mode.get():
             return False
         self.pan_start = (event.x, event.y)
@@ -677,7 +676,7 @@ class RepairWindow(ctk.CTkToplevel):
         return True
 
     def _on_pan_left_drag(self, event):
-        """Geser gambar saat tombol kiri ditarik (jika mode pan aktif)."""
+        """Pan the image when the left button is pulled (if pan mode is active)."""
         if not self.pan_mode.get() or self.pan_start is None:
             return False
         dx = event.x - self.pan_start[0]
@@ -687,7 +686,7 @@ class RepairWindow(ctk.CTkToplevel):
         return True
 
     def _on_pan_left_release(self, event):
-        """Akhiri pan (jika mode pan aktif)."""
+        """End pan (if pan mode is active)."""
         if not self.pan_mode.get():
             return False
         self.pan_start = None
@@ -715,7 +714,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("pvBG v1.4.0 — Private Background Removal (Offline)")
+        self.title("pvBG v1.4.1 — Private Human Background Removal (Offline)")
         self.geometry("1100x720")
         self.minsize(900, 620)
 
@@ -780,7 +779,7 @@ class App(TkinterDnD.Tk if DND_AVAILABLE else ctk.CTk):
 
         ctk.CTkLabel(
             header,
-            text="Private Background Removal — Offline & Private",
+            text="Private Human Background Removal — Offline & Private",
             font=ctk.CTkFont(size=12), text_color="gray"
         ).grid(row=1, column=0)
 
