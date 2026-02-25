@@ -65,6 +65,8 @@ Before running this application, please ensure you have **Python 3.10+** install
 
 We provide an automated installer that handles dependencies and creates a Desktop Shortcut for you.
 
+> **Note:** An internet connection is required **only for the first-time setup** to download the necessary Python packages. Once installed, the application runs **100% offline**.
+
 ### 🪟 For Windows Users
 
 1.  Download and extract the folder.
