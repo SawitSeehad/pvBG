@@ -5,6 +5,7 @@
 ![Version](https://img.shields.io/badge/version-v1.4.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+[![Ko-Fi](https://img.shields.io/badge/Support%20Us-F16061?style=flat&logo=ko-fi&logoColor=white)](https://ko-fi.com/sawitseehad)
 
 **pvBG** is a specialized, privacy-first desktop application designed to **remove backgrounds specifically from human portraits** (Selfies, ID photos, Group photos).
 
@@ -27,11 +28,9 @@ Unlike general-purpose tools, pvBG is optimized for **Human Segmentation**. It r
 
 ### ✨ Features & UI/UX Enhancements
 
-* **Advanced Canvas Navigation:** * Added support for panning and zooming using the **Middle Mouse Button (Mouse 3)** for a faster, professional workflow.
+* **Advanced Canvas Navigation:** Added support for panning and zooming using the **Middle Mouse Button (Mouse 3)** for a faster, professional workflow.
 * Introduced a dedicated **Pan/Cursor Mode (Shortcut: `P`)**, specifically designed to allow seamless canvas navigation for laptop and touchpad users.
 * Added dedicated **Zoom In / Zoom Out** UI buttons for pixel-perfect precision.
-
-
 * **Smart Editing Tools:** Introduced new **Magic Tools** for smarter, quicker, and more accurate mask refinement.
 * **Workspace Customization:** Added a **Dark Background** toggle, helping users easily contrast and inspect extracted subjects against a dark canvas.
 
@@ -97,7 +96,22 @@ pvBG/
 ├── LICENSE                                 # MIT License
 └── README.md                               # Documentation
 
+
 ```
+
+---
+
+## 💖 Support Our Work
+
+**pvBG** is developed independently by the **SawitSeehad** team. If this tool saves you time, helps with your workflow, or you simply appreciate our privacy-first approach, consider supporting our development!
+
+Your contribution directly helps us maintain this project, improve the AI model, and keep it completely free and offline.
+
+<div align="center">
+    <a href="https://ko-fi.com/sawitseehad" target="_blank">
+        <img src="assets/donate_button.png" alt="Support Us on Ko-fi" width="200">
+    </a>
+</div>
 
 ---
 
